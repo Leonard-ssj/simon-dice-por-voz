@@ -1,0 +1,35 @@
+# Node
+node_modules/
+.next/
+out/
+.vercel/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Whisper / ML
+*.pt
+*.bin
+modelo_voz/exportado/
+
+# Entorno
+.env
+.env.local
+.env.*.local
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/settings.json
+*.suo
+*.user

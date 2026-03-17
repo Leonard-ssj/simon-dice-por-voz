@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip --version)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(pip show:*)",
+      "Bash(python -m pip --version)",
+      "Bash(python -m pip install openai-whisper sounddevice numpy websockets)",
+      "Bash(timeout 30 python main.py)",
+      "Bash(python main.py)",
+      "Bash(python -c \"import websockets; print\\(''websockets version:'', websockets.__version__\\); import websockets.server; print\\(''websockets.server OK''\\)\")",
+      "Bash(python -c \":*)"
+    ]
+  }
+}
