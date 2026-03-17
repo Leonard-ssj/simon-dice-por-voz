@@ -4,17 +4,19 @@
 # Usado por el simulador (tests/simulador_pc/main.py).
 # Reemplaza el hardware del ESP32 (MAX98357A speaker) en pruebas.
 #
-# Funciones:
-#   reproducir_tono()    — genera y reproduce un tono con sounddevice
-#   reproducir_sonido()  — tonos de eventos del juego (correcto, error, etc.)
-#   decir() / decir_color() — narrador TTS con pyttsx3
-#   inicializar_tts()    — arranca el hilo dedicado de TTS
-#   esperar_tts()        — espera a que el motor TTS esté listo
+# TTS: PowerShell + System.Speech.SpeechSynthesizer (Windows SAPI).
+#   Garantiza que la voz suene aunque pyttsx3.runAndWait() se bloquee,
+#   que es un bug conocido de pyttsx3 en hilos de Windows.
+#   pyttsx3 se usa SOLO para detectar el nombre de la voz en español.
 #
-# El reconocimiento de voz lo hace el browser (Whisper WASM).
-# Este archivo NO contiene lógica de micrófono ni Whisper.
+# Funciones públicas:
+#   reproducir_sonido()  — tonos de eventos del juego
+#   decir() / decir_color() — narrador TTS
+#   inicializar_tts()    — arranca el hilo dedicado de TTS
+#   esperar_tts()        — espera a que el TTS esté listo
 # ============================================================
 
+import subprocess
 import numpy as np
 import sounddevice as sd
 import sys
@@ -46,70 +48,109 @@ FRECUENCIAS_ESPECIALES = {
 }
 
 
-# ---- TTS (Text-to-Speech) ----
-# Usa pyttsx3 para narrar el juego en voz alta.
-# Corre en hilo propio para no bloquear sounddevice.
+# ---- TTS — PowerShell SAPI ----
+# Cada frase corre en un subprocess de PowerShell que llama a
+# System.Speech.SpeechSynthesizer.Speak().
+# Esto evita el bug de pyttsx3 donde runAndWait() se bloquea en hilos de Windows.
 
 _tts_queue: queue.Queue = queue.Queue()
-_tts_listo = threading.Event()   # se activa cuando el motor está inicializado
+_tts_listo  = threading.Event()
+_voz_nombre = ""   # nombre de la voz en español (encontrada durante inicialización)
 
 
-def _tts_worker():
-    """Hilo dedicado al TTS. Lee la cola y habla uno a uno."""
+def _detectar_voz_espanol() -> str:
+    """
+    Usa pyttsx3 SOLO para enumerar las voces del sistema y encontrar
+    una en español. Devuelve el nombre de la voz (str) o "" si no hay.
+    No llama a runAndWait() — solo enumera voces.
+    """
+    PATRONES_ES = [
+        "es-mx", "es-es", "es-us", "es-ar", "es-cl", "es-co",
+        "es_mx", "es_es",
+        "sabina", "helena", "pablo", "jorge", "maria",
+        "spanish", "español", "espanol",
+        "mstts_v110_eses", "mstts_v110_esmx",
+    ]
     try:
         import pyttsx3
         engine = pyttsx3.init()
-        engine.setProperty("rate", 130)      # velocidad de habla (palabras/min)
-        engine.setProperty("volume", 0.95)
-
-        # Buscar voz en español — patrones para Windows y otros sistemas
-        PATRONES_ES = [
-            "es-mx", "es-es", "es-us", "es-ar", "es-cl", "es-co",
-            "es_mx", "es_es",
-            "sabina", "helena", "pablo", "jorge", "maria",
-            "spanish", "español", "espanol",
-            "mstts_v110_eses", "mstts_v110_esmx",  # Windows OneCore
-        ]
-        voz_encontrada = False
-        for voice in engine.getProperty("voices"):
+        voces  = engine.getProperty("voices")
+        for voice in voces:
             vid   = voice.id.lower()
             vname = voice.name.lower()
             if any(p in vid or p in vname for p in PATRONES_ES):
-                engine.setProperty("voice", voice.id)
-                if DEBUG:
-                    print(f"[TTS] Voz en español: {voice.name}")
-                voz_encontrada = True
-                break
+                print(f"[TTS] Voz en español encontrada: {voice.name}")
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+                return voice.name
 
-        if not voz_encontrada:
-            if DEBUG:
-                print("[TTS] No se encontró voz en español.")
-                print("[TTS] Instala el paquete de voz en español:")
-                print("[TTS]   Configuración > Hora e idioma > Voz > Agregar voces")
-                print("[TTS] Voces disponibles en el sistema:")
-                for v in engine.getProperty("voices"):
-                    print(f"[TTS]   {v.name!r}  ({v.id})")
-
-        _tts_listo.set()   # señalizar que el motor está listo
-
-        while True:
-            texto = _tts_queue.get()
-            if texto is None:
-                break
-            try:
-                engine.say(texto)
-                engine.runAndWait()
-            except Exception:
-                pass
-            finally:
-                _tts_queue.task_done()
-
-    except ImportError:
-        print("[TTS] pyttsx3 no instalado. Instala: pip install pyttsx3")
-        _tts_listo.set()
+        # Sin voz en español
+        if DEBUG:
+            print("[TTS] No se encontró voz en español.")
+            print("[TTS] Voces disponibles:")
+            for v in voces:
+                print(f"[TTS]   {v.name!r}  ({v.id})")
+        try:
+            engine.stop()
+        except Exception:
+            pass
     except Exception as e:
-        print(f"[TTS] Error al inicializar: {e}")
-        _tts_listo.set()
+        if DEBUG:
+            print(f"[TTS] Error al detectar voces: {e}")
+    return ""
+
+
+def _hablar_powershell(texto: str) -> None:
+    """
+    Habla 'texto' usando PowerShell + System.Speech (SAPI).
+    Bloquea hasta que la frase termina.
+    """
+    # Escapar comillas para no romper el script de PowerShell
+    safe = texto.replace('"', "'")
+    voz_cmd = f'$s.SelectVoice("{_voz_nombre}"); ' if _voz_nombre else ""
+
+    script = (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        f"{voz_cmd}"
+        "$s.Rate = -1; "          # -10..10 : -1 = ligeramente lento, natural
+        f'$s.Speak("{safe}")'
+    )
+
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-WindowStyle", "Hidden", "-Command", script],
+            capture_output=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        if DEBUG:
+            print(f"[TTS] Timeout hablando: {texto!r}")
+    except Exception as e:
+        if DEBUG:
+            print(f"[TTS] Error PowerShell: {e}")
+
+
+def _tts_worker():
+    """Hilo dedicado. Detecta la voz y luego procesa la cola de frases."""
+    global _voz_nombre
+    _voz_nombre = _detectar_voz_espanol()
+    _tts_listo.set()   # señalizar que el TTS está listo para recibir frases
+
+    while True:
+        texto = _tts_queue.get()
+        if texto is None:
+            break
+        try:
+            _hablar_powershell(texto)
+        except Exception as e:
+            if DEBUG:
+                print(f"[TTS] Error inesperado: {e}")
+        finally:
+            _tts_queue.task_done()
 
 
 def inicializar_tts() -> None:
@@ -119,14 +160,14 @@ def inicializar_tts() -> None:
 
 
 def esperar_tts(timeout: float = 5.0) -> bool:
-    """Bloquea hasta que el motor TTS esté listo (o timeout en segundos). Retorna True si listo."""
+    """Bloquea hasta que el motor TTS esté listo. Retorna True si listo."""
     return _tts_listo.wait(timeout=timeout)
 
 
 def decir(texto: str, bloquear: bool = True) -> None:
     """
-    Dice el texto en voz alta.
-    bloquear=True espera a que termine antes de retornar (para la secuencia).
+    Encola 'texto' para ser hablado.
+    bloquear=True espera a que la frase termine antes de retornar.
     """
     if not _tts_listo.is_set():
         return
@@ -153,7 +194,8 @@ def decir_color(color: str) -> None:
 # ---- Generación y reproducción de tonos ----
 
 def _generar_tono(frecuencia_hz: float, duracion_ms: int) -> np.ndarray:
-    t = np.linspace(0, duracion_ms / 1000, int(SAMPLE_RATE * duracion_ms / 1000), endpoint=False)
+    t    = np.linspace(0, duracion_ms / 1000,
+                       int(SAMPLE_RATE * duracion_ms / 1000), endpoint=False)
     tono = np.sin(2 * np.pi * frecuencia_hz * t).astype(np.float32)
     fade = int(SAMPLE_RATE * 0.01)
     if len(tono) > 2 * fade:
