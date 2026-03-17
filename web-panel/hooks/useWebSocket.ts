@@ -331,10 +331,15 @@ export function useWebSocket() {
     conectar,
     desconectar,
     limpiarLog,
+    reiniciar: () => {
+      enviarComando("REINICIAR");
+      setEstadoJuego((prev) => ({ ...prev, log: [] }));
+    },
     whisperProgresoDescarga:  whisper.progresoDescarga,
     whisperNivelMic:          enListening ? whisper.nivelMic : 0,
     whisperGrabando:          whisper.grabando && enListening,
     whisperMicAbierto:        whisper.micAbierto && enListening,
+    whisperProcesando:        whisper.procesando && enListening,
     whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
   };
 }

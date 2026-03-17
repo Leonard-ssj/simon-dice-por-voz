@@ -88,7 +88,12 @@ class ServidorWS:
                 try:
                     data = json.loads(mensaje)
                     if data.get("tipo") == "comando" and self.on_comando:
-                        self.on_comando(data["comando"])
+                        threading.Thread(
+                            target=self.on_comando,
+                            args=(data["comando"],),
+                            daemon=True,
+                            name="cmd",
+                        ).start()
                 except Exception:
                     pass
         except Exception:

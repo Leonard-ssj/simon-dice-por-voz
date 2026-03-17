@@ -96,6 +96,10 @@ def _detectar_voz_espanol() -> str:
             engine.stop()
         except Exception:
             pass
+        if DEBUG:
+            print("[TTS] SUGERENCIA: Instala voces neurales en español:")
+            print("[TTS]   Configuración → Hora e idioma → Voz → Agregar voces")
+            print("[TTS]   Busca: 'Paulina' o 'Jorge' (México) o 'Elena' (España)")
     except Exception as e:
         if DEBUG:
             print(f"[TTS] Error al detectar voces: {e}")
@@ -115,7 +119,7 @@ def _hablar_powershell(texto: str) -> None:
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         f"{voz_cmd}"
-        "$s.Rate = -1; "          # -10..10 : -1 = ligeramente lento, natural
+        "$s.Rate = 0; "          # 0 = velocidad normal (suena más natural)
         f'$s.Speak("{safe}")'
     )
 

@@ -40,6 +40,7 @@ export interface UseWhisperWASMReturn {
   nivelMic:         number;        // RMS actual del mic normalizado 0-1 (para la barra de nivel)
   grabando:         boolean;       // true cuando VAD detectó voz y está grabando activamente
   micAbierto:       boolean;       // true cuando getUserMedia tuvo éxito (mic abierto)
+  procesando:       boolean;       // true mientras Whisper hace inferencia del audio
   tiempoRestante:   number | null; // countdown en segundos hasta timeout (null = no escuchando)
   escuchar:         () => Promise<string>;
   cancelarEscucha:  () => void;
@@ -52,6 +53,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
   const [nivelMic,         setNivelMic]         = useState(0);
   const [grabando,         setGrabando]         = useState(false);
   const [micAbierto,       setMicAbierto]       = useState(false);  // true cuando getUserMedia tuvo éxito
+  const [procesando,       setProcesando]       = useState(false);  // Whisper procesando audio
   const [tiempoRestante,   setTiempoRestante]   = useState<number | null>(null);
 
   const workerRef   = useRef<Worker | null>(null);
@@ -72,11 +74,13 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
       } else if (msg.tipo === "progreso") {
         setProgresoDescarga(msg.mensaje);
       } else if (msg.tipo === "resultado") {
+        setProcesando(false);
         setTranscribiendo(false);
         resolverRef.current?.(msg.texto);
         resolverRef.current = null;
       } else if (msg.tipo === "error") {
         console.error("[Whisper Worker]", msg.mensaje);
+        setProcesando(false);
         setTranscribiendo(false);
         resolverRef.current?.("");
         resolverRef.current = null;
@@ -162,6 +166,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
           offset += bloque.length;
         }
 
+        setProcesando(true);
         workerRef.current?.postMessage({ tipo: "transcribir", audio }, [audio.buffer]);
         // resolve() se llama desde onmessage cuando llega el resultado
       }
@@ -258,6 +263,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
     nivelMic,
     grabando,
     micAbierto,
+    procesando,
     tiempoRestante,
     escuchar,
     cancelarEscucha,

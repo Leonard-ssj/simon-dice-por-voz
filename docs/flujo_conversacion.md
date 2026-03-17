@@ -139,6 +139,91 @@ flowchart TD
 
 ---
 
+## Pasos detallados por estado — qué pasa en cada momento
+
+### 0. Startup
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 1 | Python | Inicia servidor WebSocket en ws://localhost:8765 | — |
+| 2 | Python | TTS detecta voz en español (Microsoft Sabina) | — |
+| 3 | Python | TTS listo — `_tts_listo` activado | — |
+| 4 | Browser | Whisper WASM worker descarga modelo (~125MB, cacheado) | Badge "Descargando modelo: X%" |
+| 5 | Browser | Modelo listo | Badge "Whisper listo" ✓ |
+
+### 1. Conexión
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 6 | Usuario | Clic "Conectar" | Botón activo |
+| 7 | Browser | Abre WebSocket → ws://localhost:8765 | "Conectando a ws://..." |
+| 8 | Python | Acepta conexión — dispara `on_cliente_conectado` en hilo nuevo | "Conexión establecida" |
+| 9 | Python | Mic browser **SILENCIADO 8s** (TTS hablará la bienvenida) | Silencio intencional |
+| 10 | Python TTS | "Panel conectado. Bienvenido a Simon Dice por Voz. Di empieza para comenzar." | (no badge — mic silenciado) |
+| 11 | Browser | 8s transcurridos → bucle de escucha activa | Badge invisible (IDLE) |
+
+### 2. Inicio del juego
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 12 | Browser | Escucha en segundo plano (IDLE, sin badge) | Nada visible |
+| 13 | Usuario | Dice "empieza" | — |
+| 14 | Browser VAD | RMS > 0.015 por ≥1 bloque → activa grabación | Badge "Detectando voz..." |
+| 15 | Browser VAD | 500ms de silencio → detiene grabación | Badge "Procesando..." |
+| 16 | Whisper WASM | Procesa audio (~2-5s con whisper-small) | Badge "Procesando..." |
+| 17 | validador.ts | "empieza" → START | — |
+| 18 | Browser | Envía `{"tipo":"comando","comando":"START"}` | Log: "START → enviado" |
+
+### 3. Mostrando secuencia
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 19 | Python | Inicia `_mostrar_secuencia_bloqueante()` en hilo separado | Estado: "Mostrando secuencia" |
+| 20 | Python | `STATE:SHOWING` → browser limpia datos del turno anterior | LEDs apagados |
+| 21 | Python | `LED:ROJO` → tono 262Hz (400ms) → `LED:null` | LED Rojo se enciende → se apaga |
+| 22 | Python | Pausa 300ms | — |
+| 23 | Python | Repite para cada color de la secuencia | Cada LED parpadea en el panel |
+| 24 | Browser mic | Mic cancelado durante SHOWING | Sin badge |
+
+### 4. Turno del jugador
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 25 | Python | `STATE:LISTENING` → `silencioHastaRef = 0` | Estado: "Escuchando..." |
+| 26 | Browser | Badge "Escuchando..." aparece inmediatamente | Badge indigo pulsante |
+| 27 | Browser | `getUserMedia()` abre el micrófono real (~300-500ms) | Badge "Abriendo micrófono..." |
+| 28 | Browser | Mic abierto → countdown 8s comienza | Badge "Habla ahora" azul |
+| 29 | Usuario | Dice el color | Barra de nivel sube |
+| 30 | Browser VAD | RMS > 0.015 → activa grabación | Badge "Detectando voz..." verde |
+| 31 | Browser VAD | 500ms silencio → para grabación, cierra mic | Badge "Procesando..." violeta |
+| 32 | Whisper WASM | Inferencia (~2-5s) | Badge "Procesando..." |
+| 33 | validador.ts | Normaliza texto → comando canónico | — |
+| 34 | Browser | Envía `{"tipo":"comando","comando":"ROJO"}` | Log: `"rojo" → ROJO` |
+
+### 5. Evaluación — Correcto
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 35 | Python | Evalúa: ROJO == esperado → CORRECT | Estado: "¡Correcto!" |
+| 36 | Python | `RESULT:CORRECT` → browser silencia mic 2.5s | silencioHastaRef + 2.5s |
+| 37 | Python TTS | "Correcto. Nivel N." (~1.5s) | Badge desaparece |
+| 38 | Python | Si secuencia completa → `LEVEL_UP` + nueva secuencia | Nivel +1 |
+| 39 | Python | Vuelve al paso 19 (siguiente nivel) | — |
+
+### 6. Evaluación — Incorrecto o Timeout
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 35b | Python | Evalúa: color incorrecto / 15s sin respuesta | Estado: "Incorrecto" / "Timeout" |
+| 36b | Python | `RESULT:WRONG/TIMEOUT` → browser silencia mic 4.5s | silencioHastaRef + 4.5s |
+| 37b | Python TTS | "Incorrecto/Tiempo agotado. Di empieza para intentar de nuevo." | Badge desaparece |
+| 38b | Python | `STATE:GAMEOVER` → browser silencia mic 7s | Banner rojo "Fin del juego" |
+| 39b | Python TTS | "Fin del juego. Obtuviste X puntos. Di empieza para volver a jugar." | — |
+| 40b | Browser | 7s transcurridos → escucha "empieza" en segundo plano | Sin badge (GAMEOVER) |
+| 41b | Usuario | Dice "empieza" o clic "Reiniciar" | Nueva partida |
+
+### 7. Reinicio vía botón
+| # | Quién | Acción | Panel web |
+|---|---|---|---|
+| 42 | Usuario | Clic botón "↺ Reiniciar" | — |
+| 43 | Browser | Envía `{"tipo":"comando","comando":"REINICIAR"}` | Log limpiado |
+| 44 | Python | `juego.procesar_comando("REINICIAR")` → nueva partida | Vuelve al paso 19 |
+
+---
+
 ## Sesión con PAUSA
 
 ```
