@@ -283,10 +283,13 @@ export function useWebSerial() {
   };
 
   return {
-    estadoJuego:           estadoConWhisper,
+    estadoJuego:              estadoConWhisper,
     conectar,
     desconectar,
     webSerialDisponible,
-    whisperProgresoDescarga: whisper.progresoDescarga,
+    whisperProgresoDescarga:  whisper.progresoDescarga,
+    whisperNivelMic:          whisper.nivelMic,
+    whisperGrabando:          whisper.grabando,
+    whisperTiempoRestante:    whisper.tiempoRestante,
   };
 }

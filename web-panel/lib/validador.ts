@@ -66,7 +66,7 @@ function esAlucinacion(texto: string): boolean {
   // Repetición excesiva de la misma palabra → loop de alucinación
   const conteo = new Map<string, number>();
   for (const p of palabras) conteo.set(p, (conteo.get(p) ?? 0) + 1);
-  if (Math.max(...conteo.values()) > 3) return true;
+  if (Math.max(...Array.from(conteo.values())) > 3) return true;
 
   return false;
 }

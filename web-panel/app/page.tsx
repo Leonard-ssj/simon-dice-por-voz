@@ -28,10 +28,10 @@ export default function Home() {
   const activo = modo === "websocket" ? ws : serial;
   const { estadoJuego } = activo;
   const limpiarLog = modo === "websocket" ? ws.limpiarLog : undefined;
-  const whisperProgreso =
-    "whisperProgresoDescarga" in activo
-      ? (activo as typeof serial).whisperProgresoDescarga
-      : "";
+  const whisperProgreso       = activo.whisperProgresoDescarga ?? "";
+  const whisperNivelMic       = activo.whisperNivelMic ?? 0;
+  const whisperGrabando       = activo.whisperGrabando ?? false;
+  const whisperTiempoRestante = activo.whisperTiempoRestante ?? null;
 
   const handleConectar    = useCallback(() => activo.conectar(),    [activo]);
   const handleDesconectar = useCallback(() => activo.desconectar(), [activo]);
@@ -115,6 +115,9 @@ export default function Home() {
             whisperCargado={estadoJuego.whisperCargado}
             whisperTranscribiendo={estadoJuego.whisperTranscribiendo}
             whisperProgreso={whisperProgreso}
+            whisperNivelMic={whisperNivelMic}
+            whisperGrabando={whisperGrabando}
+            whisperTiempoRestante={whisperTiempoRestante}
           />
         </div>
 

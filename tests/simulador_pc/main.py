@@ -12,13 +12,11 @@
 #   Los comandos reconocidos llegan al simulador via WebSocket como JSON:
 #   {"tipo": "comando", "comando": "ROJO"}
 #
-#   El simulador NO usa el micrófono directamente.
-#   Abre el panel en http://localhost:3000 para jugar.
-#
 # Uso:
 #   cd tests/simulador_pc
 #   python main.py
-#   → luego abre http://localhost:3000 en Chrome/Edge
+#   → luego abre http://localhost:3000 en Chrome o Edge
+#   → conecta al modo "Simulador WebSocket"
 # ============================================================
 
 import sys
@@ -26,7 +24,6 @@ import os
 import threading
 import time
 
-# Asegurar imports locales
 sys.path.insert(0, os.path.dirname(__file__))
 
 from config_test import DEBUG
@@ -44,7 +41,7 @@ juego = JuegoSimulador()
 ws    = ServidorWS()
 
 
-# ---- Helpers de log con colores ----
+# ---- Helpers de log con colores ANSI ----
 COLORES_ANSI = {
     "info":    "\033[37m",
     "ok":      "\033[32m",
@@ -56,12 +53,12 @@ COLORES_ANSI = {
 }
 
 def log(msg: str, tipo: str = "info"):
-    nueva_linea()  # no sobreescribir el panel de LEDs
+    nueva_linea()
     color = COLORES_ANSI.get(tipo, "")
     print(f"{color}  {msg}{COLORES_ANSI['reset']}")
 
 
-# ---- Conectar callbacks del juego ----
+# ---- Callbacks del juego ----
 
 _NOMBRES_ESTADO_ES = {
     Estado.IDLE:             "Esperando",
@@ -81,11 +78,27 @@ def _on_estado(estado: Estado):
     nombre_es = _NOMBRES_ESTADO_ES.get(estado, nombre)
     log(f"[Estado] {nombre_es}", "estado")
     ws.enviar_estado(nombre)
-    # Narrador — comentar transiciones importantes
-    if estado == Estado.LISTENING:
+
+    if estado == Estado.SHOWING_SEQUENCE:
+        decir("Mira y escucha.", bloquear=False)
+
+    elif estado == Estado.LISTENING:
         decir("Tu turno.", bloquear=False)
+
+    elif estado == Estado.EVALUATING:
+        log("Procesando respuesta...", "info")
+        ws.enviar_log("Procesando respuesta...")
+
+    elif estado == Estado.PAUSA:
+        decir("Juego pausado.", bloquear=False)
+
     elif estado == Estado.GAME_OVER:
-        decir("Fin del juego.", bloquear=False)
+        pts = getattr(juego, "puntuacion", 0)
+        def _narrar_game_over():
+            time.sleep(0.3)
+            decir(f"Fin del juego. Obtuviste {pts} puntos.", bloquear=True)
+            decir("Di empieza para volver a jugar.", bloquear=True)
+        threading.Thread(target=_narrar_game_over, daemon=True).start()
 
 
 def _on_led_encender(color: str):
@@ -105,7 +118,7 @@ def _on_leds_apagar():
 
 def _on_sonido(tipo: str, extra=None):
     if tipo == "color" and extra:
-        # Tono primero (bloqueante ~400ms), luego TTS — evita conflicto de audio en Windows
+        # Tono primero (~400ms), luego TTS — evita conflicto de audio en Windows
         reproducir_sonido(tipo, extra)
         decir_color(extra)
     else:
@@ -115,7 +128,6 @@ def _on_sonido(tipo: str, extra=None):
 def _on_secuencia(seq: list):
     log(f"[Secuencia] {' → '.join(seq)}", "sistema")
     ws.enviar_secuencia(seq)
-    decir("Mira la secuencia.", bloquear=False)
 
 
 def _on_esperado(color: str):
@@ -126,7 +138,11 @@ def _on_esperado(color: str):
 def _on_nivel(n: int):
     log(f"[Nivel] {n}", "sistema")
     ws.enviar_nivel(n)
-    decir(f"¡Correcto! Nivel {n}.", bloquear=False)
+    def _narrar_nivel():
+        decir("Correcto.", bloquear=True)
+        if n > 1:
+            decir(f"Nivel {n}.", bloquear=True)
+    threading.Thread(target=_narrar_nivel, daemon=True).start()
 
 
 def _on_puntuacion(p: int):
@@ -134,23 +150,51 @@ def _on_puntuacion(p: int):
 
 
 def _on_resultado(r: str):
-    tipo    = "ok" if r == "CORRECT" else "error"
+    tipo     = "ok" if r == "CORRECT" else "error"
     etiqueta = {
-        "CORRECT": "✓ Correcto",
-        "WRONG":   "✗ Incorrecto",
-        "TIMEOUT": "⏱ Tiempo agotado",
+        "CORRECT": "Correcto",
+        "WRONG":   "Incorrecto",
+        "TIMEOUT": "Tiempo agotado",
     }.get(r, r)
     log(f"[Resultado] {etiqueta}", tipo)
     ws.enviar_resultado(r)
+
     if r == "WRONG":
-        decir("Incorrecto.", bloquear=False)
+        def _narrar_wrong():
+            time.sleep(0.2)
+            decir("Incorrecto.", bloquear=True)
+            decir("Di empieza para intentar de nuevo.", bloquear=True)
+        threading.Thread(target=_narrar_wrong, daemon=True).start()
+
     elif r == "TIMEOUT":
-        decir("Tiempo agotado.", bloquear=False)
+        def _narrar_timeout():
+            time.sleep(0.2)
+            decir("Tiempo agotado.", bloquear=True)
+            decir("Di empieza para intentar de nuevo.", bloquear=True)
+        threading.Thread(target=_narrar_timeout, daemon=True).start()
 
 
 def _on_log(msg: str):
     log(msg, "info")
     ws.enviar_log(msg)
+
+
+def _on_cliente_conectado():
+    """Bienvenida y reglas cuando el panel web se conecta."""
+    time.sleep(0.6)  # esperar que la conexion se establezca en el browser
+    log("[Panel] Cliente conectado — narrando bienvenida", "sistema")
+    decir("Panel conectado.", bloquear=True)
+    decir("Bienvenido a Simon Dice por Voz.", bloquear=True)
+    decir("El sistema mostrara una secuencia de colores.", bloquear=True)
+    decir("Cuando sea tu turno, di el color en voz alta.", bloquear=True)
+    decir("Di empieza para comenzar.", bloquear=True)
+
+
+def _on_comando_panel(cmd: str):
+    """Comando reconocido por Whisper WASM en el browser."""
+    log(f"[Panel] Comando: {cmd}", "voz")
+    ws.enviar_log(f"Comando recibido: {cmd}")
+    juego.procesar_comando(cmd)
 
 
 def _registrar_callbacks():
@@ -166,20 +210,13 @@ def _registrar_callbacks():
     juego.on_resultado     = _on_resultado
     juego.on_log           = _on_log
 
-    # Comandos reconocidos por Whisper WASM en el browser → llegan via WebSocket
-    ws.on_comando = _on_comando_panel
-
-
-def _on_comando_panel(cmd: str):
-    """Comando recibido desde el Web Panel (Whisper WASM en el browser)."""
-    log(f"[Panel] Comando: {cmd}", "voz")
-    juego.procesar_comando(cmd)
+    ws.on_comando           = _on_comando_panel
+    ws.on_cliente_conectado = _on_cliente_conectado
 
 
 # ---- Hilo de tick (timeout del turno) ----
 
 def hilo_tick():
-    """Verifica el timeout del turno cada 200ms."""
     while True:
         juego.tick()
         time.sleep(0.2)
@@ -191,36 +228,32 @@ def main():
     print("\n" + "=" * 55)
     print("  SIMON DICE POR VOZ — Simulador PC (modo TEST)")
     print("=" * 55)
-    print("  Abre el panel en Chrome/Edge para jugar:")
-    print("  → http://localhost:3000")
+    print("  1. Abre Chrome o Edge en:")
+    print("     http://localhost:3000")
     print("")
-    print("  El browser usa Whisper WASM para reconocer tu voz.")
-    print("  Di EMPIEZA para comenzar cuando el panel esté conectado.")
+    print("  2. Selecciona 'Simulador — WebSocket'")
+    print("  3. Haz clic en 'Conectar'")
+    print("  4. Espera 'Whisper listo' y di EMPIEZA")
     print("=" * 55 + "\n")
 
-    # Inicializar TTS (narrador del juego)
     inicializar_tts()
 
-    # Iniciar WebSocket — el panel se conecta aquí
     ws.iniciar()
     ws.enviar_ready()
 
-    # Registrar callbacks y arrancar el motor del juego
     _registrar_callbacks()
     juego.iniciar()
 
-    # Hilo de tick (timeout del turno)
     t_tick = threading.Thread(target=hilo_tick, daemon=True, name="tick")
     t_tick.start()
 
-    # Bienvenida del narrador
-    def _bienvenida():
+    # Mensaje de voz inicial cuando el TTS esté listo
+    def _bienvenida_inicio():
         if esperar_tts(timeout=5.0):
-            decir("Simulador listo. Abre el panel web para jugar.", bloquear=True)
-    threading.Thread(target=_bienvenida, daemon=True, name="bienvenida").start()
+            decir("Simulador listo. Abre el panel web y conecta al simulador.", bloquear=True)
+    threading.Thread(target=_bienvenida_inicio, daemon=True, name="bienvenida").start()
 
-    log("Simulador listo. Esperando conexión del panel web...", "sistema")
-    log("Abre http://localhost:3000 en Chrome o Edge.", "sistema")
+    log("Simulador listo. Esperando conexion del panel web...", "sistema")
 
     try:
         while True:

@@ -291,10 +291,13 @@ export function useWebSocket() {
   };
 
   return {
-    estadoJuego:             estadoConWhisper,
+    estadoJuego:              estadoConWhisper,
     conectar,
     desconectar,
     limpiarLog,
-    whisperProgresoDescarga: whisper.progresoDescarga,
+    whisperProgresoDescarga:  whisper.progresoDescarga,
+    whisperNivelMic:          whisper.nivelMic,
+    whisperGrabando:          whisper.grabando,
+    whisperTiempoRestante:    whisper.tiempoRestante,
   };
 }

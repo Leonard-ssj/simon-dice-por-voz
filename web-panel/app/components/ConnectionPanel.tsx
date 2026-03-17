@@ -12,10 +12,13 @@ interface Props {
   onDesconectar: () => void;
   serialDisponible?: boolean;
   dark: boolean;
-  // Estado de Whisper (solo relevante en modo serial)
   whisperCargado?: boolean;
   whisperTranscribiendo?: boolean;
   whisperProgreso?: string;
+  // Retroalimentación del micrófono en tiempo real
+  whisperNivelMic?: number;        // RMS normalizado 0-1 (barra de nivel)
+  whisperGrabando?: boolean;       // VAD activo — grabando voz
+  whisperTiempoRestante?: number | null; // countdown en segundos
 }
 
 export default function ConnectionPanel({
@@ -29,9 +32,18 @@ export default function ConnectionPanel({
   whisperCargado = false,
   whisperTranscribiendo = false,
   whisperProgreso = "",
+  whisperNivelMic = 0,
+  whisperGrabando = false,
+  whisperTiempoRestante = null,
 }: Props) {
-  // Whisper aplica en ambos modos: serial (ESP32) y websocket (simulador Python)
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
+
+  // Color de la barra de nivel: verde si sobre umbral, azul si bajo
+  const barColor = whisperNivelMic > 0.25
+    ? "bg-emerald-400"
+    : whisperNivelMic > 0.08
+    ? "bg-yellow-400"
+    : "bg-blue-400/60";
 
   return (
     <div className={cn(
@@ -73,33 +85,58 @@ export default function ConnectionPanel({
         </span>
       )}
 
-      {/* Badge estado de Whisper (solo en modo serial) */}
+      {/* Badge + barra de nivel de Whisper */}
       {mostrarWhisper && (
-        whisperTranscribiendo ? (
-          <span className={cn(
-            "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full animate-pulse",
-            dark ? "bg-blue-500/15 text-blue-300" : "bg-blue-100 text-blue-600"
-          )}>
-            <Mic size={11} />
-            Escuchando...
-          </span>
-        ) : whisperCargado ? (
-          <span className={cn(
-            "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
-            dark ? "bg-emerald-500/15 text-emerald-400" : "bg-emerald-100 text-emerald-600"
-          )}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            Whisper listo
-          </span>
-        ) : (
-          <span className={cn(
-            "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
-            dark ? "bg-yellow-500/15 text-yellow-400" : "bg-yellow-100 text-yellow-600"
-          )}>
-            <Loader2 size={11} className="animate-spin" />
-            {whisperProgreso || "Cargando modelo..."}
-          </span>
-        )
+        <div className="flex items-center gap-2">
+          {/* Badge de estado */}
+          {whisperTranscribiendo ? (
+            <span className={cn(
+              "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
+              whisperGrabando
+                ? "bg-emerald-500/20 text-emerald-300 animate-pulse"
+                : "bg-blue-500/15 text-blue-300 animate-pulse"
+            )}>
+              <Mic size={11} className={whisperGrabando ? "text-emerald-400" : ""} />
+              {whisperGrabando
+                ? "Grabando..."
+                : whisperTiempoRestante != null
+                  ? `Habla ahora · ${whisperTiempoRestante}s`
+                  : "Habla ahora"}
+            </span>
+          ) : whisperCargado ? (
+            <span className={cn(
+              "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
+              dark ? "bg-emerald-500/15 text-emerald-400" : "bg-emerald-100 text-emerald-600"
+            )}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              Whisper listo
+            </span>
+          ) : (
+            <span className={cn(
+              "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
+              dark ? "bg-yellow-500/15 text-yellow-400" : "bg-yellow-100 text-yellow-600"
+            )}>
+              <Loader2 size={11} className="animate-spin" />
+              {whisperProgreso || "Cargando modelo..."}
+            </span>
+          )}
+
+          {/* Barra de nivel del micrófono — visible cuando está escuchando */}
+          {whisperTranscribiendo && (
+            <div
+              title={`Nivel mic: ${Math.round(whisperNivelMic * 100)}%`}
+              className={cn(
+                "w-20 h-2.5 rounded-full overflow-hidden",
+                dark ? "bg-white/8" : "bg-slate-200"
+              )}
+            >
+              <div
+                className={cn("h-full rounded-full transition-all duration-150", barColor)}
+                style={{ width: `${Math.round(whisperNivelMic * 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {/* Estado conexión */}

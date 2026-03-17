@@ -10,10 +10,29 @@ import { pipeline, env } from "@huggingface/transformers";
 env.allowLocalModels   = false;
 env.useBrowserCache    = true;
 
-// Vocabulario como initial_prompt — igual que audio_pc.py
+// Vocabulario como initial_prompt en minúsculas para que Whisper lo use como contexto.
+// Debe estar en minúsculas — el modelo fue entrenado con texto en minúsculas/mixto, no ALL CAPS.
 const INITIAL_PROMPT =
-  "ROJO VERDE AZUL AMARILLO START STOP PAUSA REPITE REINICIAR " +
-  "EMPIEZA INICIA COMIENZA PARA ESPERA VOLVER";
+  "rojo verde azul amarillo empieza inicia comienza para pausa repite reinicia " +
+  "arriba abajo izquierda derecha sí no";
+
+// Umbral de energía mínima del audio antes de llamar a Whisper.
+// Evita que Whisper alucine texto a partir de silencio o ruido de fondo muy bajo.
+const RMS_MIN_PARA_TRANSCRIBIR = 0.012;
+
+// Calcula el RMS máximo en bloques de 50ms para detectar si hay voz real.
+function calcRmsMax(audio: Float32Array): number {
+  const blockSize = 800; // 50ms a 16kHz
+  let maxRms = 0;
+  for (let i = 0; i + blockSize <= audio.length; i += blockSize) {
+    const block = audio.subarray(i, i + blockSize);
+    let suma = 0;
+    for (let j = 0; j < block.length; j++) suma += block[j] * block[j];
+    const rms = Math.sqrt(suma / block.length);
+    if (rms > maxRms) maxRms = rms;
+  }
+  return maxRms;
+}
 
 type MensajeWorkerEntrada =
   | { tipo: "cargar" }
@@ -62,6 +81,15 @@ async function cargarModelo() {
 async function transcribir(audio: Float32Array) {
   if (!transcriber) {
     enviar({ tipo: "error", mensaje: "Modelo no cargado" });
+    return;
+  }
+
+  // Verificar que el audio tenga suficiente energia antes de llamar a Whisper.
+  // Si el RMS maximo es menor al umbral, el audio es silencio o ruido muy bajo
+  // y Whisper alucinaria texto inventado. Retornar "" directamente es mas rapido.
+  const rmsMax = calcRmsMax(audio);
+  if (rmsMax < RMS_MIN_PARA_TRANSCRIBIR) {
+    enviar({ tipo: "resultado", texto: "" });
     return;
   }
 

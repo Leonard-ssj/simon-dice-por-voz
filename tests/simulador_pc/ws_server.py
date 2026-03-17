@@ -34,7 +34,8 @@ class ServidorWS:
         self._thread: threading.Thread | None = None
         self._cola: asyncio.Queue | None = None
         self._listo = threading.Event()
-        self.on_comando = None   # callback(str) — llamado cuando el panel manda un comando
+        self.on_comando           = None  # callback(str)  — panel manda comando de voz
+        self.on_cliente_conectado = None  # callback()     — un cliente se conectó
 
     @property
     def hay_clientes(self) -> bool:
@@ -78,6 +79,9 @@ class ServidorWS:
         self._clientes.add(websocket)
         if DEBUG:
             print(f"[WS] Cliente conectado ({path}). Total: {len(self._clientes)}")
+        # Notificar a main.py para narración de bienvenida (en thread separado, no bloquea asyncio)
+        if self.on_cliente_conectado:
+            threading.Thread(target=self.on_cliente_conectado, daemon=True, name="bienvenida-panel").start()
         try:
             async for mensaje in websocket:
                 # El panel puede mandar comandos reconocidos por Whisper
