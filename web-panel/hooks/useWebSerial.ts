@@ -275,11 +275,13 @@ export function useWebSerial() {
     agregarLog("Desconectado del ESP32", "sistema");
   }, [agregarLog, whisper]);
 
-  // Sincronizar estado de Whisper al estadoJuego
+  // Badge solo visible en LISTENING — en otros estados escucha en segundo plano
+  const enListening = estadoJuego.estado === "LISTENING";
+
   const estadoConWhisper: EstadoCliente = {
     ...estadoJuego,
     whisperCargado:        whisper.modeloCargado,
-    whisperTranscribiendo: whisper.transcribiendo,
+    whisperTranscribiendo: whisper.transcribiendo && enListening,
   };
 
   return {
@@ -288,8 +290,9 @@ export function useWebSerial() {
     desconectar,
     webSerialDisponible,
     whisperProgresoDescarga:  whisper.progresoDescarga,
-    whisperNivelMic:          whisper.nivelMic,
-    whisperGrabando:          whisper.grabando,
-    whisperTiempoRestante:    whisper.tiempoRestante,
+    whisperNivelMic:          enListening ? whisper.nivelMic : 0,
+    whisperGrabando:          whisper.grabando && enListening,
+    whisperMicAbierto:        whisper.micAbierto && enListening,
+    whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
   };
 }

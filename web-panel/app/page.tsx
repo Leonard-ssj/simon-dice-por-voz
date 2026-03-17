@@ -31,6 +31,7 @@ export default function Home() {
   const whisperProgreso       = activo.whisperProgresoDescarga ?? "";
   const whisperNivelMic       = activo.whisperNivelMic ?? 0;
   const whisperGrabando       = activo.whisperGrabando ?? false;
+  const whisperMicAbierto     = activo.whisperMicAbierto ?? false;
   const whisperTiempoRestante = activo.whisperTiempoRestante ?? null;
 
   const handleConectar    = useCallback(() => activo.conectar(),    [activo]);
@@ -117,6 +118,7 @@ export default function Home() {
             whisperProgreso={whisperProgreso}
             whisperNivelMic={whisperNivelMic}
             whisperGrabando={whisperGrabando}
+            whisperMicAbierto={whisperMicAbierto}
             whisperTiempoRestante={whisperTiempoRestante}
           />
         </div>

@@ -18,6 +18,7 @@ interface Props {
   // Retroalimentación del micrófono en tiempo real
   whisperNivelMic?: number;        // RMS normalizado 0-1 (barra de nivel)
   whisperGrabando?: boolean;       // VAD activo — grabando voz
+  whisperMicAbierto?: boolean;     // getUserMedia tuvo éxito — mic realmente abierto
   whisperTiempoRestante?: number | null; // countdown en segundos
 }
 
@@ -34,6 +35,7 @@ export default function ConnectionPanel({
   whisperProgreso = "",
   whisperNivelMic = 0,
   whisperGrabando = false,
+  whisperMicAbierto = false,
   whisperTiempoRestante = null,
 }: Props) {
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
@@ -94,14 +96,16 @@ export default function ConnectionPanel({
               "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
               whisperGrabando
                 ? "bg-emerald-500/20 text-emerald-300 animate-pulse"
-                : "bg-blue-500/15 text-blue-300 animate-pulse"
+                : whisperMicAbierto
+                  ? "bg-blue-500/15 text-blue-300 animate-pulse"
+                  : "bg-white/8 text-white/40"
             )}>
               <Mic size={11} className={whisperGrabando ? "text-emerald-400" : ""} />
               {whisperGrabando
                 ? "Grabando..."
-                : whisperTiempoRestante != null
-                  ? `Habla ahora · ${whisperTiempoRestante}s`
-                  : "Habla ahora"}
+                : whisperMicAbierto
+                  ? (whisperTiempoRestante != null ? `Habla ahora · ${whisperTiempoRestante}s` : "Habla ahora")
+                  : "Abriendo micrófono..."}
             </span>
           ) : whisperCargado ? (
             <span className={cn(

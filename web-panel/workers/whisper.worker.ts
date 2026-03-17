@@ -57,9 +57,9 @@ async function cargarModelo() {
 
     transcriber = await (pipeline as any)(
       "automatic-speech-recognition",
-      "onnx-community/whisper-small",
+      "onnx-community/whisper-tiny",
       {
-        dtype: "q8",  // cuantización 8-bit — reduce el tamaño de ~244MB a ~125MB
+        dtype: "q8",  // cuantización 8-bit — ~40MB, se cachea en IndexedDB
         progress_callback: (progreso: { status: string; progress?: number }) => {
           if (progreso.status === "downloading" && progreso.progress !== undefined) {
             const pct = Math.round(progreso.progress);

@@ -92,8 +92,10 @@ export function useWebSocket() {
     if (escuchandoVozRef.current || !whisper.modeloCargado) return;
     escuchandoVozRef.current = true;
 
-    setEstadoJuego((prev) => ({ ...prev, whisperTranscribiendo: true }));
-    agregarLog("Escuchando... habla ahora", "sistema");
+    // Solo loguear "Escuchando..." cuando el juego realmente pide voz
+    if (estadoRef.current === "LISTENING") {
+      agregarLog("Escuchando... habla ahora", "sistema");
+    }
 
     try {
       const textoRaw = await whisper.escuchar();
@@ -137,9 +139,10 @@ export function useWebSocket() {
         if (!bucleVozActivoRef.current) break;
         const elapsed = Date.now() - t;
         // Retorno rápido (< 300ms): modelo aún no listo o ya escuchando → espera corta
-        // Sesión real completada: espera 1.5s para que el juego procese el comando
-        // antes de volver a escuchar. Evita disparos en cadena de alucinaciones.
-        await dormir(elapsed < 300 ? 400 : 1500);
+        // En LISTENING: espera 1.5s para que el juego procese antes de volver a escuchar.
+        // En otros estados (IDLE, GAMEOVER): espera más para no saturar con alucinaciones.
+        const enEscuchaActiva = estadoRef.current === "LISTENING";
+        await dormir(elapsed < 300 ? 400 : enEscuchaActiva ? 1500 : 3000);
       } else {
         await dormir(200);
       }
@@ -284,10 +287,14 @@ export function useWebSocket() {
     };
   }, []);
 
+  // El badge de "Habla ahora" solo se muestra cuando el juego está en LISTENING.
+  // En IDLE/GAMEOVER el bucle escucha en silencio para detectar "empieza".
+  const enListening = estadoJuego.estado === "LISTENING";
+
   const estadoConWhisper: EstadoCliente = {
     ...estadoJuego,
     whisperCargado:        whisper.modeloCargado,
-    whisperTranscribiendo: whisper.transcribiendo,
+    whisperTranscribiendo: whisper.transcribiendo && enListening,
   };
 
   return {
@@ -296,8 +303,9 @@ export function useWebSocket() {
     desconectar,
     limpiarLog,
     whisperProgresoDescarga:  whisper.progresoDescarga,
-    whisperNivelMic:          whisper.nivelMic,
-    whisperGrabando:          whisper.grabando,
-    whisperTiempoRestante:    whisper.tiempoRestante,
+    whisperNivelMic:          enListening ? whisper.nivelMic : 0,
+    whisperGrabando:          whisper.grabando && enListening,
+    whisperMicAbierto:        whisper.micAbierto && enListening,
+    whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
   };
 }

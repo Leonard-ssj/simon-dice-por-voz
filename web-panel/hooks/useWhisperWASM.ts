@@ -39,6 +39,7 @@ export interface UseWhisperWASMReturn {
   progresoDescarga: string;
   nivelMic:         number;        // RMS actual del mic normalizado 0-1 (para la barra de nivel)
   grabando:         boolean;       // true cuando VAD detectó voz y está grabando activamente
+  micAbierto:       boolean;       // true cuando getUserMedia tuvo éxito (mic abierto)
   tiempoRestante:   number | null; // countdown en segundos hasta timeout (null = no escuchando)
   escuchar:         () => Promise<string>;
   cancelarEscucha:  () => void;
@@ -50,6 +51,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
   const [progresoDescarga, setProgresoDescarga] = useState("");
   const [nivelMic,         setNivelMic]         = useState(0);
   const [grabando,         setGrabando]         = useState(false);
+  const [micAbierto,       setMicAbierto]       = useState(false);  // true cuando getUserMedia tuvo éxito
   const [tiempoRestante,   setTiempoRestante]   = useState<number | null>(null);
 
   const workerRef   = useRef<Worker | null>(null);
@@ -105,6 +107,8 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
 
       cancelarRef.current = false;
       resolverRef.current = resolve;
+      // transcribiendo=true desactiva el botón para evitar llamadas dobles,
+      // pero el badge "Habla ahora" solo aparece cuando el mic realmente abre (micAbierto).
       setTranscribiendo(true);
 
       let audioCtx:       AudioContext | null      = null;
@@ -139,6 +143,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
         // Resetear indicadores UI
         setNivelMic(0);
         setGrabando(false);
+        setMicAbierto(false);
         setTiempoRestante(null);
 
         if (motivo === "cancelado" || muestrasAcumuladas.length === 0 || duracionMs < DURACION_MINIMA) {
@@ -175,6 +180,9 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
           audioCtx      = new AudioContext({ sampleRate: SAMPLE_RATE });
           sourceNode    = audioCtx.createMediaStreamSource(stream);
           processorNode = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
+
+          // El mic está abierto — mostrar badge "Habla ahora"
+          setMicAbierto(true);
 
           // Countdown desde que abre el mic
           const inicioEscucha = Date.now();
@@ -232,6 +240,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
           setTranscribiendo(false);
           setNivelMic(0);
           setGrabando(false);
+          setMicAbierto(false);
           setTiempoRestante(null);
           resolve("");
           resolverRef.current = null;
@@ -248,6 +257,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
     progresoDescarga,
     nivelMic,
     grabando,
+    micAbierto,
     tiempoRestante,
     escuchar,
     cancelarEscucha,

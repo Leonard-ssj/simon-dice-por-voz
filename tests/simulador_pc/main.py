@@ -96,8 +96,8 @@ def _on_estado(estado: Estado):
         pts = getattr(juego, "puntuacion", 0)
         def _narrar_game_over():
             time.sleep(0.3)
-            decir(f"Fin del juego. Obtuviste {pts} puntos.", bloquear=True)
-            decir("Di empieza para volver a jugar.", bloquear=True)
+            decir(f"Fin del juego. Obtuviste {pts} puntos.", bloquear=False)
+            decir("Di empieza para volver a jugar.", bloquear=False)
         threading.Thread(target=_narrar_game_over, daemon=True).start()
 
 
@@ -139,9 +139,9 @@ def _on_nivel(n: int):
     log(f"[Nivel] {n}", "sistema")
     ws.enviar_nivel(n)
     def _narrar_nivel():
-        decir("Correcto.", bloquear=True)
+        decir("Correcto.", bloquear=False)
         if n > 1:
-            decir(f"Nivel {n}.", bloquear=True)
+            decir(f"Nivel {n}.", bloquear=False)
     threading.Thread(target=_narrar_nivel, daemon=True).start()
 
 
@@ -162,15 +162,15 @@ def _on_resultado(r: str):
     if r == "WRONG":
         def _narrar_wrong():
             time.sleep(0.2)
-            decir("Incorrecto.", bloquear=True)
-            decir("Di empieza para intentar de nuevo.", bloquear=True)
+            decir("Incorrecto.", bloquear=False)
+            decir("Di empieza para intentar de nuevo.", bloquear=False)
         threading.Thread(target=_narrar_wrong, daemon=True).start()
 
     elif r == "TIMEOUT":
         def _narrar_timeout():
             time.sleep(0.2)
-            decir("Tiempo agotado.", bloquear=True)
-            decir("Di empieza para intentar de nuevo.", bloquear=True)
+            decir("Tiempo agotado.", bloquear=False)
+            decir("Di empieza para intentar de nuevo.", bloquear=False)
         threading.Thread(target=_narrar_timeout, daemon=True).start()
 
 
@@ -181,13 +181,15 @@ def _on_log(msg: str):
 
 def _on_cliente_conectado():
     """Bienvenida y reglas cuando el panel web se conecta."""
-    time.sleep(0.6)  # esperar que la conexion se establezca en el browser
+    time.sleep(0.8)  # esperar que la conexion se establezca en el browser
     log("[Panel] Cliente conectado — narrando bienvenida", "sistema")
-    decir("Panel conectado.", bloquear=True)
-    decir("Bienvenido a Simon Dice por Voz.", bloquear=True)
-    decir("El sistema mostrara una secuencia de colores.", bloquear=True)
-    decir("Cuando sea tu turno, di el color en voz alta.", bloquear=True)
-    decir("Di empieza para comenzar.", bloquear=True)
+    # bloquear=False: encola todas las frases y el hilo TTS las procesa en orden.
+    # Evita que dos hilos llamen a queue.join() al mismo tiempo y se bloqueen.
+    decir("Panel conectado.", bloquear=False)
+    decir("Bienvenido a Simon Dice por Voz.", bloquear=False)
+    decir("El sistema mostrara una secuencia de colores.", bloquear=False)
+    decir("Cuando sea tu turno, di el color en voz alta.", bloquear=False)
+    decir("Di empieza para comenzar.", bloquear=False)
 
 
 def _on_comando_panel(cmd: str):
