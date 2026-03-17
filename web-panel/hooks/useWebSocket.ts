@@ -64,6 +64,9 @@ export function useWebSocket() {
   const estadoRef         = useRef<EstadoJuego>("IDLE");
   // Ref que siempre apunta a la versión más reciente de iniciarEscuchaVoz
   const iniciarEscuchaRef = useRef<() => Promise<void>>(async () => {});
+  // Ventana de silencio — mientras Date.now() < silencioHastaRef, el mic NO abre.
+  // Evita que el mic capture el TTS del simulador Python como comandos de voz.
+  const silencioHastaRef = useRef<number>(0);
 
   const whisper = useWhisperWASM();
 
@@ -90,6 +93,11 @@ export function useWebSocket() {
   // ---- Escucha de voz con Whisper WASM (igual que en modo Serial) ----
   const iniciarEscuchaVoz = useCallback(async () => {
     if (escuchandoVozRef.current || !whisper.modeloCargado) return;
+    // No abrir el mic durante la ventana de silencio (TTS hablando)
+    if (Date.now() < silencioHastaRef.current) {
+      escuchandoVozRef.current = false;
+      return;
+    }
     escuchandoVozRef.current = true;
 
     // Solo loguear "Escuchando..." cuando el juego realmente pide voz
@@ -101,8 +109,8 @@ export function useWebSocket() {
       const textoRaw = await whisper.escuchar();
       const comando  = textoAComando(textoRaw);
 
-      // Solo loguear si hubo texto real (evita spam de "" → DESCONOCIDO)
-      if (textoRaw) {
+      // Solo loguear en LISTENING — en IDLE/GAMEOVER escuchamos en segundo plano sin spam
+      if (textoRaw && estadoRef.current === "LISTENING") {
         agregarLog(`"${textoRaw}" → ${comando}`, "voz");
       }
 
@@ -168,9 +176,16 @@ export function useWebSocket() {
             if (msg.estado !== "SHOWING") {
               siguiente.ledActivo = null;
             }
-            // Al entrar en SHOWING no se necesita voz — cancelar si hubiera grabación activa
+            // Nuevo ciclo: limpiar datos del turno anterior
             if (msg.estado === "SHOWING") {
               whisper.cancelarEscucha();
+              siguiente.ultimaDeteccion    = null;
+              siguiente.ultimoTextoWhisper = null;
+              siguiente.ultimoResultado    = null;
+            }
+            // Cuando empieza LISTENING: limpiar ventana de silencio para escuchar de inmediato
+            if (msg.estado === "LISTENING") {
+              silencioHastaRef.current = 0;
             }
             agregarLog(`Estado: ${NOMBRES_ESTADO[msg.estado] ?? msg.estado}`, "info");
             break;
@@ -186,9 +201,19 @@ export function useWebSocket() {
 
           case "result":
             siguiente.ultimoResultado = msg.resultado as ResultadoTurno;
-            if (msg.resultado === "CORRECT") agregarLog("Correcto ✓", "correcto");
-            else if (msg.resultado === "WRONG") agregarLog("Incorrecto ✗", "error");
-            else agregarLog("Tiempo agotado ⏱", "error");
+            if (msg.resultado === "CORRECT") {
+              agregarLog("Correcto ✓", "correcto");
+              // TTS dice "Correcto. Nivel N." (~2s) — silenciar mic
+              silencioHastaRef.current = Date.now() + 2500;
+            } else if (msg.resultado === "WRONG") {
+              agregarLog("Incorrecto ✗", "error");
+              // TTS dice "Incorrecto. Di empieza para intentar de nuevo." (~4s)
+              silencioHastaRef.current = Date.now() + 4500;
+            } else {
+              agregarLog("Tiempo agotado ⏱", "error");
+              // TTS dice "Tiempo agotado. Di empieza para intentar de nuevo." (~4s)
+              silencioHastaRef.current = Date.now() + 4500;
+            }
             break;
 
           case "sequence":
@@ -215,6 +240,8 @@ export function useWebSocket() {
             siguiente.ultimaDeteccion = null;
             siguiente.ultimoTextoWhisper = null;
             agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
+            // TTS dice "Fin del juego. Obtuviste X puntos. Di empieza para volver a jugar." (~6s)
+            silencioHastaRef.current = Date.now() + 7000;
             break;
 
           case "voz":
@@ -242,6 +269,8 @@ export function useWebSocket() {
     socket.onopen = () => {
       setEstadoJuego((prev) => ({ ...prev, conectado: true }));
       agregarLog("Conexión WebSocket establecida", "sistema");
+      // Silenciar mic durante la narración de bienvenida del TTS Python (~7s)
+      silencioHastaRef.current = Date.now() + 8000;
       // Arrancar el bucle continuo de voz
       bucleVozActivoRef.current = true;
       bucleVoz();

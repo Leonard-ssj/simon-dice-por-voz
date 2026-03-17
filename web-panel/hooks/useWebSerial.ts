@@ -55,6 +55,9 @@ export function useWebSerial() {
   const estadoRef         = useRef<EstadoJuego>("IDLE");
   // Ref que siempre apunta a la versión más reciente de iniciarEscuchaVoz
   const iniciarEscuchaRef = useRef<() => Promise<void>>(async () => {});
+  // Ventana de silencio — mientras Date.now() < silencioHastaRef, el mic NO abre.
+  // Evita que el mic capture el TTS del simulador Python como comandos de voz.
+  const silencioHastaRef = useRef<number>(0);
 
   const whisper = useWhisperWASM();
 
@@ -89,6 +92,11 @@ export function useWebSerial() {
 
   const iniciarEscuchaVoz = useCallback(async () => {
     if (escuchandoVozRef.current || !whisper.modeloCargado) return;
+    // No abrir el mic durante la ventana de silencio (TTS hablando)
+    if (Date.now() < silencioHastaRef.current) {
+      escuchandoVozRef.current = false;
+      return;
+    }
     escuchandoVozRef.current = true;
 
     setEstadoJuego((prev) => ({ ...prev, whisperTranscribiendo: true }));
@@ -98,8 +106,8 @@ export function useWebSerial() {
       const textoRaw = await whisper.escuchar();
       const comando  = textoAComando(textoRaw);
 
-      // Solo loguear si hubo texto real (evita spam de "" → DESCONOCIDO)
-      if (textoRaw) {
+      // Solo loguear en LISTENING — en IDLE/GAMEOVER escuchamos en segundo plano sin spam
+      if (textoRaw && estadoRef.current === "LISTENING") {
         agregarLog(`"${textoRaw}" → ${comando}`, "voz");
       }
 
@@ -172,6 +180,10 @@ export function useWebSerial() {
           if (nuevoEstado !== "SHOWING") {
             siguiente.ledActivo = null;
           }
+          // Cuando empieza LISTENING: limpiar ventana de silencio para escuchar de inmediato
+          if (nuevoEstado === "LISTENING") {
+            silencioHastaRef.current = 0;
+          }
           agregarLog(`Estado: ${nuevoEstado}`, "info");
         } else if (linea.startsWith("LED:")) {
           const color = linea.slice(4);
@@ -181,9 +193,16 @@ export function useWebSerial() {
           agregarLog(`Detectado: ${siguiente.ultimaDeteccion}`, "voz");
         } else if (linea.startsWith("RESULT:")) {
           siguiente.ultimoResultado = linea.slice(7) as ResultadoTurno;
-          if (siguiente.ultimoResultado === "CORRECT") agregarLog("Correcto ✓", "correcto");
-          else if (siguiente.ultimoResultado === "WRONG") agregarLog("Incorrecto ✗", "error");
-          else agregarLog("Tiempo agotado ⏱", "error");
+          if (siguiente.ultimoResultado === "CORRECT") {
+            agregarLog("Correcto ✓", "correcto");
+            silencioHastaRef.current = Date.now() + 2500;
+          } else if (siguiente.ultimoResultado === "WRONG") {
+            agregarLog("Incorrecto ✗", "error");
+            silencioHastaRef.current = Date.now() + 4500;
+          } else {
+            agregarLog("Tiempo agotado ⏱", "error");
+            silencioHastaRef.current = Date.now() + 4500;
+          }
         } else if (linea.startsWith("SEQUENCE:")) {
           siguiente.secuencia = linea.slice(9).split(",") as ColorJuego[];
         } else if (linea.startsWith("EXPECTED:")) {
@@ -200,6 +219,8 @@ export function useWebSerial() {
           siguiente.ultimaDeteccion = null;
           siguiente.ultimoTextoWhisper = null;
           agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
+          // TTS dice "Fin del juego. Obtuviste X puntos. Di empieza para volver a jugar." (~6s)
+          silencioHastaRef.current = Date.now() + 7000;
         } else if (!linea.startsWith("//")) {
           agregarLog(linea, "info");
         }
@@ -233,6 +254,8 @@ export function useWebSerial() {
 
       setEstadoJuego((prev) => ({ ...prev, conectado: true }));
       agregarLog("Conectado al ESP32 por Web Serial", "sistema");
+      // Silenciar mic brevemente al conectar (no hay TTS de bienvenida en modo serial)
+      silencioHastaRef.current = Date.now() + 3000;
 
       // Arrancar el bucle continuo de voz
       bucleVozActivoRef.current = true;

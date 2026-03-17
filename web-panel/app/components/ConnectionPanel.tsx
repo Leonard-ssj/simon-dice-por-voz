@@ -102,9 +102,9 @@ export default function ConnectionPanel({
             )}>
               <Mic size={11} className={whisperGrabando ? "text-emerald-400" : ""} />
               {whisperGrabando
-                ? "Grabando..."
+                ? "Detectando voz..."
                 : whisperMicAbierto
-                  ? (whisperTiempoRestante != null ? `Habla ahora · ${whisperTiempoRestante}s` : "Habla ahora")
+                  ? "Habla ahora"
                   : "Abriendo micrófono..."}
             </span>
           ) : whisperCargado ? (
@@ -130,7 +130,7 @@ export default function ConnectionPanel({
             <div
               title={`Nivel mic: ${Math.round(whisperNivelMic * 100)}%`}
               className={cn(
-                "w-20 h-2.5 rounded-full overflow-hidden",
+                "w-24 h-3 rounded-full overflow-hidden",
                 dark ? "bg-white/8" : "bg-slate-200"
               )}
             >

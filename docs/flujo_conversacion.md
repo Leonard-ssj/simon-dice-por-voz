@@ -1,6 +1,7 @@
 # Flujo de conversación con el sistema
 
 > Cómo interactúa el jugador con Simon Dice por Voz en cada estado del juego.
+> Arquitectura actual: Browser Whisper WASM + simulador Python WebSocket / ESP32 Web Serial.
 
 ---
 
@@ -8,18 +9,38 @@
 
 | Comando | Sinónimos reconocidos | Cuándo es válido |
 |---|---|---|
-| `START` | empieza, inicia, comienza, jugar, arranca | IDLE, GAMEOVER, PAUSA |
-| `ROJO` | roja, roxo, ronjo, roco | LISTENING |
-| `VERDE` | berde, berdi, verd | LISTENING |
-| `AZUL` | asul, azur, asor | LISTENING |
-| `AMARILLO` | amarilla, amarijo, marillo, amarilo | LISTENING |
-| `REPITE` | repetir, repita, otra vez, de nuevo | LISTENING |
-| `PAUSA` | pausar, espera | LISTENING |
-| `STOP` | para, parar, termina, fin, salir | cualquier momento |
-| `REINICIAR` | reinicia, reset, volver | GAMEOVER |
+| `START` | empieza, inicia, comienza, jugar, arranca, vamos | IDLE, GAMEOVER, PAUSA |
+| `ROJO` | roja, roxo, ronjo, roco, roso | LISTENING |
+| `VERDE` | berde, berdi, verd, erde, birde | LISTENING |
+| `AZUL` | asul, azur, asor, asur, azuul | LISTENING |
+| `AMARILLO` | amarilla, amarijo, marillo, amarilo, marrillo | LISTENING |
+| `REPITE` | repetir, repita, repítelo, otra vez, de nuevo | LISTENING |
+| `PAUSA` | pausar, espera, esperar | LISTENING, PAUSA |
+| `STOP` | para, parar, termina, fin, salir, detente, alto | cualquier momento |
+| `REINICIAR` | reinicia, reset, volver, reinicio | GAMEOVER |
 
 El validador (`validador.ts` / `validador.py`) normaliza el texto de Whisper:
 elimina acentos, pasa a mayúsculas, quita puntuación, busca variantes fonéticas.
+Solo busca palabra por palabra si el texto tiene ≤ 3 palabras (evita falsos positivos).
+
+---
+
+## Orquestador de ventanas de silencio
+
+El browser **silencia el micrófono automáticamente** después de ciertos eventos para evitar
+que el TTS del simulador Python sea capturado por Whisper como comando de voz.
+
+| Evento | Ventana de silencio | Razón |
+|---|---|---|
+| Cliente conecta | 8 segundos | TTS narra bienvenida y reglas |
+| `RESULT:CORRECT` | 2.5 segundos | TTS dice "Correcto. Nivel N." |
+| `RESULT:WRONG` | 4.5 segundos | TTS dice "Incorrecto. Di empieza..." |
+| `RESULT:TIMEOUT` | 4.5 segundos | TTS dice "Tiempo agotado. Di empieza..." |
+| `GAMEOVER` | 7 segundos | TTS narra puntuación y cómo reiniciar |
+| `STATE:LISTENING` | 0 (limpia) | Escuchar de inmediato cuando es el turno |
+
+Cuando el estado cambia a `SHOWING`, el browser cancela cualquier grabación activa
+y limpia los datos del turno anterior (última detección, texto crudo, último resultado).
 
 ---
 
@@ -28,85 +49,92 @@ elimina acentos, pasa a mayúsculas, quita puntuación, busca variantes fonétic
 ```mermaid
 %%{init: {"flowchart": {"htmlLabels": false}} }%%
 flowchart TD
-    A(["Sistema listo"]) -->|"Whisper WASM cargado en browser"| B["IDLE: esperando START"]
-    B -->|"Jugador dice START"| C["Sistema muestra secuencia N=1"]
+    A(["Panel conecta"]) -->|"TTS: bienvenida (~7s)\nBrowser: mic silenciado 8s"| B["IDLE: esperando START"]
+    B -->|"Jugador dice START\nBrowser abre mic en segundo plano"| C["Estado: SHOWING — Nivel 1"]
 
-    C --> D["LED ROJO enciende + tono + voz: rojo"]
-    D --> E["LED ROJO apaga"]
-    E -->|"Si hay mas colores"| D
-    E -->|"Secuencia terminada"| F["Estado: LISTENING — timeout 15s"]
+    C --> D["LED encendido + tono + TTS color"]
+    D --> E["LED apagado"]
+    E -->|"Si hay más colores"| D
+    E -->|"Secuencia terminada"| F["Estado: LISTENING\nBrowser: mic abre automáticamente"]
 
-    F -->|"Jugador dice color correcto"| G{"Secuencia completa?"}
-    F -->|"Jugador dice color incorrecto"| I["RESULT:WRONG | GAME OVER"]
+    F -->|"Jugador dice color correcto"| G{"Secuencia\ncompleta?"}
+    F -->|"Jugador dice color incorrecto"| I["RESULT:WRONG\nTTS: incorrecto (~4s)\nBrowser: mic silenciado 4.5s"]
     F -->|"Jugador dice REPITE"| C
-    F -->|"Jugador dice PAUSA"| P["Estado: PAUSA | timer congelado"]
-    F -->|"15 segundos sin respuesta"| T["TIMEOUT | GAME OVER"]
-    F -->|"Jugador dice STOP"| I
+    F -->|"Jugador dice PAUSA"| P["Estado: PAUSA — timer congelado"]
+    F -->|"Timeout 15s"| T["RESULT:TIMEOUT\nTTS: tiempo agotado\nBrowser: mic silenciado 4.5s"]
 
     G -->|"No: sigue la secuencia"| F
-    G -->|"Si: nivel superado"| H["Nivel N superado | secuencia crece en 1"]
+    G -->|"Sí: nivel superado"| H["TTS: Correcto. Nivel N.\nBrowser: mic silenciado 2.5s"]
     H --> C
 
+    I --> OV["Estado: GAMEOVER\nTTS: puntuación + instrucciones (~6s)\nBrowser: mic silenciado 7s"]
+    T --> OV
+    OV -->|"Jugador dice START"| C
     P -->|"Jugador dice PAUSA o START"| F
-    I -->|"Jugador dice START o REINICIAR"| C
-    T -->|"Jugador dice START o REINICIAR"| C
 
     classDef sistema fill:#0f2d4a,stroke:#4a9eff,color:#fff
     classDef jugador fill:#0a2a0a,stroke:#33cc33,color:#ddd
     classDef error fill:#2a0a0a,stroke:#ff4444,color:#fff
+    classDef mute fill:#2a1a0a,stroke:#ff9900,color:#fff
 
     class A,C,D,E,F,H sistema
     class B,G jugador
-    class I,T error
+    class I,T,OV error
+    class H mute
 ```
 
 ---
 
-## Transcripción de una sesión típica (con panel conectado)
+## Transcripción de una sesión típica (modo simulador WebSocket)
 
 ```
 [SISTEMA] Whisper WASM cargado en browser — badge "Whisper listo"
 [SISTEMA] Estado: IDLE
 
+=== CONEXIÓN ===
+[BROWSER] WebSocket conectado → mic SILENCIADO 8s
+[SIMULADOR] TTS: "Panel conectado."
+[SIMULADOR] TTS: "Bienvenido a Simon Dice por Voz."
+[SIMULADOR] TTS: "El sistema mostrará una secuencia de colores."
+[SIMULADOR] TTS: "Cuando sea tu turno, di el color en voz alta."
+[SIMULADOR] TTS: "Di empieza para comenzar."
+[BROWSER] (8s transcurridos) → mic activo para IDLE
+
+=== INICIO DE PARTIDA ===
 [JUGADOR] "empieza"
-[BROWSER] Whisper reconoce: "empieza" → START
-[BROWSER] Envía "START" por WebSocket / Serial al simulador/ESP32
+[BROWSER] VAD detecta voz → mic graba → Whisper: "empieza" → START
+[BROWSER] Envía {"tipo":"comando","comando":"START"} por WebSocket
+[SIMULADOR] TTS: "Mira y escucha."
 [SISTEMA] Estado: SHOWING — Nivel 1
 
-[SISTEMA] LED ROJO encendido
-[SISTEMA] Tono 262 Hz (400ms)
-[SIMULADOR] TTS: "rojo"  ← solo en modo simulador PC
+[SISTEMA] LED ROJO encendido | Tono 262Hz
+[SIMULADOR] TTS: "rojo"
 [SISTEMA] LED ROJO apagado
+[BROWSER] mic CANCELADO durante SHOWING
+
 [SISTEMA] Estado: LISTENING — timeout 15s
+[BROWSER] mic ACTIVO (ventana de silencio = 0)
 
+=== TURNO CORRECTO ===
 [JUGADOR] "rojo"
-[BROWSER] Whisper reconoce: "rojo" → ROJO
-[BROWSER] Envía "ROJO" por WebSocket / Serial
-[SISTEMA] Estado: EVALUATING
-[SISTEMA] CORRECTO — secuencia completa (1/1)
-[SISTEMA] TTS: "Correcto. Nivel 2."  ← solo simulador
-[SISTEMA] Estado: SHOWING — Nivel 2
+[BROWSER] VAD → Whisper: "rojo" → ROJO
+[BROWSER] Envía {"tipo":"comando","comando":"ROJO"} → CORRECT
+[SIMULADOR] TTS: "Correcto. Nivel 2."
+[BROWSER] mic SILENCIADO 2.5s
 
-[SISTEMA] LED VERDE encendido → tono → TTS "verde" → apagado
-[SISTEMA] LED ROJO encendido → tono → TTS "rojo" → apagado
-[SISTEMA] Estado: LISTENING
+=== TURNO INCORRECTO ===
+[JUGADOR] "azul"  ← respuesta incorrecta
+[SISTEMA] RESULT:WRONG
+[SIMULADOR] TTS: "Incorrecto. Di empieza para intentar de nuevo."
+[BROWSER] mic SILENCIADO 4.5s → Estado: GAMEOVER
 
-[JUGADOR] "verde"
-[SISTEMA] CORRECTO — 1/2
+=== GAME OVER ===
+[SIMULADOR] TTS: "Fin del juego. Obtuviste 30 puntos."
+[SIMULADOR] TTS: "Di empieza para volver a jugar."
+[BROWSER] mic SILENCIADO 7s → luego activo para GAMEOVER
 
-[JUGADOR] "rojo"
-[SISTEMA] CORRECTO — 2/2 → nivel superado
-
-... (ciclo continua hasta GAME OVER)
-
-[JUGADOR] "azul"   ← respuesta incorrecta
-[SISTEMA] TTS: "Incorrecto."  ← solo simulador
-[SISTEMA] Sonido de error
-[SISTEMA] Estado: GAME OVER — puntuación: 30
-
-[JUGADOR] "reinicia"
-[BROWSER] Whisper reconoce: "reinicia" → REINICIAR
-[SISTEMA] Estado: SHOWING — Nivel 1 (nueva partida)
+[JUGADOR] "empieza"
+[BROWSER] Whisper: "empieza" → START → nueva partida
 ```
 
 ---
@@ -120,48 +148,25 @@ flowchart TD
 [BROWSER] Whisper → PAUSA → enviado
 [SISTEMA] Estado: PAUSA — timer congelado
 
-... (jugador se ausenta) ...
-
 [JUGADOR] "pausa"   (o "empieza")
-[SISTEMA] Estado: LISTENING — timer reanuda desde donde se quedó
+[SISTEMA] Estado: LISTENING — timer reanuda
 ```
 
 ---
 
-## Sesión con REPITE
+## Filtro de alucinaciones de Whisper
 
-```
-[SISTEMA] Estado: LISTENING — Nivel 4
+Whisper a veces inventa texto cuando no hay voz real. El sistema lo filtra así:
 
-[JUGADOR] "repite"
-[BROWSER] Whisper → REPITE → enviado
-[SISTEMA] Estado: SHOWING — secuencia del nivel 4 se muestra nuevamente
-[SISTEMA] (Los 4 colores se muestran con LED + tono)
-[SISTEMA] Estado: LISTENING — timeout reinicia
-```
+1. **Verificación de energía en el worker**: Si el RMS máximo del audio < 0.012, no se llama a Whisper. Devuelve `""` de inmediato.
+2. **Sin vocabulario del juego**: Si el texto transcrito no contiene ninguna palabra del vocabulario del juego, se descarta como alucinación.
+3. **Repetición excesiva**: Si la misma palabra aparece > 3 veces, es un loop de alucinación.
+4. **Texto muy largo**: Solo se busca palabra por palabra si el texto tiene ≤ 3 palabras (evita falsos positivos como "no hay nada que no hay" → NO).
+5. **Ventana de silencio**: El mic no abre durante los primeros segundos después de eventos con TTS, evitando que Whisper capture el audio del narrador.
 
 ---
 
-## Comportamiento ante comandos no reconocidos
-
-```
-[JUGADOR] "hola"
-[BROWSER] Whisper transcribe: "hola"
-[BROWSER] validador.ts: "hola" → DESCONOCIDO
-[BROWSER] No se envía al juego — el sistema ignora
-[SISTEMA] El timer continúa corriendo
-
-[JUGADOR] (habla muy quedito o hace ruido)
-[BROWSER] VAD (RMS < 0.025) no confirma voz
-[BROWSER] No se envía a Whisper, el timer continúa
-
-[JUGADOR] (silencio por 15 segundos)
-[SISTEMA] TIMEOUT → GAME OVER
-```
-
----
-
-## Mensajes WebSocket enviados durante una partida (modo simulador)
+## Mensajes WebSocket durante una partida (modo simulador)
 
 | Evento | Mensaje JSON | Cuándo |
 |---|---|---|
@@ -171,15 +176,13 @@ flowchart TD
 | LED apagado | `{"tipo":"led","color":null}` | Durante secuencia |
 | Secuencia completa | `{"tipo":"sequence","secuencia":["ROJO","VERDE"]}` | Al iniciar nivel |
 | Color esperado | `{"tipo":"expected","esperado":"ROJO"}` | Al iniciar turno |
-| Palabra detectada | `{"tipo":"detected","palabra":"ROJO"}` | Tras reconocimiento |
-| Texto crudo | `{"tipo":"voz","texto":"rojo","comando":"ROJO"}` | Tras Whisper Python |
 | Resultado | `{"tipo":"result","resultado":"CORRECT"}` | Tras evaluar |
 | Nivel | `{"tipo":"level","nivel":3}` | Al subir nivel |
 | Puntuación | `{"tipo":"score","puntuacion":30}` | Al cambiar score |
 | Game Over | `{"tipo":"gameover"}` | Fin de partida |
 | Log | `{"tipo":"log","raw":"mensaje"}` | Debug/info |
 
-### Panel → simulador (comando de voz reconocido por Whisper WASM en el browser)
+### Panel → simulador
 
 ```json
 {"tipo": "comando", "comando": "ROJO"}
@@ -191,8 +194,11 @@ flowchart TD
 
 | Bug | Causa | Estado |
 |---|---|---|
-| TTS no decía los colores | `sounddevice` y `pyttsx3` abrían el dispositivo de audio simultáneamente en Windows | **Corregido:** el tono se reproduce primero (bloqueante) y luego TTS habla |
-| LEDs no se veían en el panel durante la secuencia | `_on_led_encender`/`_on_led_apagar` no enviaban mensajes WebSocket; `page.tsx` usaba `estadoJuego.esperado` (null durante SHOWING) en lugar de un campo dedicado | **Corregido:** mensaje `tipo:"led"` + campo `ledActivo` en el estado del cliente |
-| "empieza" no funcionaba con panel conectado | El browser solo activaba Whisper en STATE:LISTENING, pero "empieza" se dice en IDLE | **Corregido:** bucle continuo de voz que escucha en todos los estados: IDLE, LISTENING, PAUSA, GAMEOVER |
-| Python grababa audio mientras el panel se conectaba | `hilo_voz` solo chequeaba `ws.hay_clientes` al inicio del while, no cancelaba una grabación en curso | **Corregido:** parámetro `abortar=lambda: ws.hay_clientes` en `escuchar_voz()` |
-| `servidor_pc/validador.py` eliminado rompía el simulador | El simulador importaba del validador eliminado; sin él, "empieza" se convertía en "EMPIEZA" (inválido) en vez de "START" | **Corregido:** `tests/simulador_pc/validador.py` recreado con toda la lógica de normalización |
+| TTS no decía los colores | `sounddevice` y `pyttsx3` abrían el dispositivo de audio simultáneamente en Windows | **Corregido:** tono primero (bloqueante) luego TTS |
+| LEDs no se veían en el panel | `_on_led_encender`/`_on_led_apagar` no enviaban WS; `page.tsx` usaba `estadoJuego.esperado` en lugar de `ledActivo` | **Corregido:** mensaje `tipo:"led"` + campo `ledActivo` |
+| Whisper capturaba TTS del simulador | El mic estaba abierto mientras el narrador Python hablaba | **Corregido:** ventanas de silencio de 2.5–8s según el evento |
+| "[MÚSICA]" y alucinaciones en IDLE | Whisper procesaba silencio/ruido de fondo repetidamente | **Corregido:** ventana de silencio + filtro de energía RMS + solo loguear en LISTENING |
+| "empieza" no reconocido | Whisper tiny con poco contexto reconocía "Empiezan.", "En pieza." | **Corregido:** modelo whisper-small q8 + initial_prompt expandido |
+| Log spameado con DESCONOCIDO | El bucle de fondo logueaba cada intento en IDLE/GAMEOVER | **Corregido:** solo loguear resultados de voz en estado LISTENING |
+| Badge "Habla ahora" antes de abrir mic | `transcribiendo=true` se activaba antes de `getUserMedia` | **Corregido:** estado `micAbierto` separado |
+| Badge mostraba en GAMEOVER/IDLE | Bucle de fondo activaba el badge visual en todos los estados | **Corregido:** badge y nivel de mic solo visibles en estado LISTENING |

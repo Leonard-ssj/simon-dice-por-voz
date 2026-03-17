@@ -13,8 +13,18 @@ env.useBrowserCache    = true;
 // Vocabulario como initial_prompt en minúsculas para que Whisper lo use como contexto.
 // Debe estar en minúsculas — el modelo fue entrenado con texto en minúsculas/mixto, no ALL CAPS.
 const INITIAL_PROMPT =
-  "rojo verde azul amarillo empieza inicia comienza para pausa repite reinicia " +
-  "arriba abajo izquierda derecha sí no";
+  // Colores del juego — formas naturales de decirlos
+  "rojo verde azul amarillo " +
+  "di rojo di verde di azul di amarillo " +
+  "el color es rojo es verde es azul es amarillo " +
+  // Comandos de inicio y control
+  "empieza inicia comienza jugar arranca vamos ya " +
+  "para pausa espera para el juego " +
+  "repite otra vez de nuevo vuélvelo a poner " +
+  "reinicia reset volver empezar de nuevo " +
+  // Contexto del juego
+  "simon dice simon dice por voz nivel uno dos tres cuatro cinco " +
+  "correcto incorrecto fin del juego sí no";
 
 // Umbral de energía mínima del audio antes de llamar a Whisper.
 // Evita que Whisper alucine texto a partir de silencio o ruido de fondo muy bajo.
@@ -57,7 +67,7 @@ async function cargarModelo() {
 
     transcriber = await (pipeline as any)(
       "automatic-speech-recognition",
-      "onnx-community/whisper-tiny",
+      "onnx-community/whisper-small",
       {
         dtype: "q8",  // cuantización 8-bit — ~40MB, se cachea en IndexedDB
         progress_callback: (progreso: { status: string; progress?: number }) => {
