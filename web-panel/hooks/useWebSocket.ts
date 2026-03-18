@@ -1,7 +1,7 @@
 "use client";
 
 // ============================================================
-// hooks/useWebSocket.ts — Modo Simulador PC
+// hooks/useWebSocket.ts — Modo Simulador PC (Fase 1)
 //
 // Conecta al simulador Python via WebSocket.
 //
@@ -9,17 +9,17 @@
 //
 //   PREFERIDO (Whisper local en Python):
 //     El servidor anuncia whisperDisponible:true en el mensaje READY.
-//     PTT → browser captura audio PCM Float32 16kHz con AudioContext
-//     → envía frame binario WebSocket → Python transcribe con Whisper
-//     → servidor devuelve {"tipo":"voz", "texto":"...", "comando":"..."}
-//     → browser actualiza UI.
+//     El browser envía señales de control PTT — Python abre el micrófono
+//     del sistema directamente (sounddevice), graba, transcribe con Whisper
+//     y devuelve {"tipo":"voz","texto":"...","comando":"..."}.
+//     El browser NO necesita permisos de micrófono en este modo.
 //
 //   FALLBACK (Whisper WASM en browser):
-//     Si el servidor no tiene Whisper (whisperDisponible:false),
-//     el browser usa useWhisperWASM igual que antes.
-//     Sigue siendo PTT (barra espaciadora / botón).
+//     Si el servidor no tiene Whisper (whisperDisponible:false), el browser
+//     descarga Whisper WASM (lazy, solo cuando se confirma que hace falta),
+//     captura el micrófono localmente y envía el texto del comando.
 //
-// Sin bucle continuo. El usuario controla el micrófono con PTT.
+// Sin bucle continuo. PTT: barra espaciadora o botón visible.
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -64,30 +64,24 @@ let contadorLog = 0;
 
 export function useWebSocket() {
   const [estadoJuego, setEstadoJuego] = useState<EstadoCliente>(ESTADO_INICIAL);
-  const ws              = useRef<WebSocket | null>(null);
-  const escuchandoRef   = useRef(false);
-  const estadoRef       = useRef<EstadoJuego>("IDLE");
-  const iniciarPTTRef   = useRef<() => void>(() => {});
+  const ws             = useRef<WebSocket | null>(null);
+  const escuchandoRef  = useRef(false);
+  const estadoRef      = useRef<EstadoJuego>("IDLE");
+  const iniciarPTTRef  = useRef<() => void>(() => {});
 
-  // ---- Modo Whisper local (Python) ----
+  // ---- Modo Whisper local (Python mic) ----
   const whisperDisponibleRef = useRef(false);
   const [whisperLocalActivo, setWhisperLocalActivo] = useState(false);
 
-  // Estado de grabación raw para UI
+  // UI para el modo Python mic (browser no graba, solo muestra estados)
   const [rawGrabando,   setRawGrabando]   = useState(false);
   const [rawProcesando, setRawProcesando] = useState(false);
   const rawGrabandoRef   = useRef(false);
   const rawProcesandoRef = useRef(false);
 
-  // Refs de AudioContext para grabar PCM sin Whisper WASM
-  const audioCtxRef     = useRef<AudioContext | null>(null);
-  const micRawRef       = useRef<MediaStream | null>(null);
-  const audioSamplesRef = useRef<Float32Array[]>([]);
-  const grabandoRawRef  = useRef(false);
-  const [rawNivelMic,   setRawNivelMic]   = useState(0);
-
-  // ---- Whisper WASM (fallback) ----
-  const whisper = useWhisperWASM();
+  // ---- Whisper WASM (fallback — lazy, solo si Python no tiene Whisper) ----
+  // autoCargar = false: no descarga nada hasta saber si hace falta
+  const whisper = useWhisperWASM(false);
 
   // ---- Helpers ----
 
@@ -120,86 +114,14 @@ export function useWebSocket() {
     }
   }, []);
 
-  // Señal de control — llega antes del audio binario en la misma conexión TCP,
-  // por lo que Python puede pausar el timer SIN race condition con el tick.
+  // Señal de control (PTT_INICIO, PTT_FIN) — llegan antes del audio en TCP
   const enviarControl = useCallback((accion: string) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ tipo: "control", accion }));
     }
   }, []);
 
-  // ---- Grabación PCM raw (para Whisper local en Python) ----
-
-  const iniciarGrabacionRaw = useCallback(async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        sampleRate:       16000,
-        channelCount:     1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
-    micRawRef.current      = stream;
-    audioSamplesRef.current = [];
-    grabandoRawRef.current  = true;
-
-    // AudioContext a 16kHz — mismo formato que espera Whisper
-    const ctx = new AudioContext({ sampleRate: 16000 });
-    audioCtxRef.current = ctx;
-
-    const source    = ctx.createMediaStreamSource(stream);
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
-
-    processor.onaudioprocess = (e) => {
-      if (!grabandoRawRef.current) return;
-      const data = e.inputBuffer.getChannelData(0);
-      audioSamplesRef.current.push(new Float32Array(data));
-
-      // Nivel de micrófono para la barra de UI
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-      setRawNivelMic(Math.min(Math.sqrt(sum / data.length) * 5, 1));
-    };
-
-    source.connect(processor);
-    processor.connect(ctx.destination);
-
-    // Guardar referencias para cleanup
-    (ctx as AudioContext & { _src: AudioNode; _proc: AudioNode })._src  = source;
-    (ctx as AudioContext & { _src: AudioNode; _proc: AudioNode })._proc = processor;
-  }, []);
-
-  const finalizarGrabacionRaw = useCallback(async (): Promise<ArrayBuffer | null> => {
-    grabandoRawRef.current = false;
-    setRawNivelMic(0);
-
-    const ctx = audioCtxRef.current;
-    if (ctx) {
-      const c = ctx as AudioContext & { _src: AudioNode; _proc: AudioNode };
-      c._src?.disconnect();
-      c._proc?.disconnect();
-      await ctx.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    micRawRef.current?.getTracks().forEach((t) => t.stop());
-    micRawRef.current = null;
-
-    const muestras = audioSamplesRef.current;
-    if (muestras.length === 0) return null;
-
-    const totalLen = muestras.reduce((a, b) => a + b.length, 0);
-    if (totalLen < 1600) return null; // < 0.1s — ignorar
-
-    const combined = new Float32Array(totalLen);
-    let offset = 0;
-    for (const buf of muestras) {
-      combined.set(buf, offset);
-      offset += buf.length;
-    }
-    return combined.buffer;
-  }, []);
-
-  // ---- PTT: iniciar grabación ----
+  // ---- PTT: iniciar ----
 
   const iniciarPTTVoz = useCallback(async () => {
     if (escuchandoRef.current) return;
@@ -208,24 +130,14 @@ export function useWebSocket() {
     escuchandoRef.current = true;
 
     if (whisperDisponibleRef.current) {
-      // ── Modo Whisper local: grabar audio raw → enviar binario a Python ──
-      // Pausar el timer del juego ANTES de empezar a grabar.
-      // PTT_INICIO llega a Python por el mismo socket TCP, antes del audio binario,
-      // lo que elimina la race condition entre pausar_timeout() y tick().
-      if (estadoRef.current === "LISTENING") {
-        enviarControl("PTT_INICIO");
-      }
-      try {
-        setRawGrabandoAll(true);
-        await iniciarGrabacionRaw();
-        // escuchandoRef se libera cuando llega el mensaje "voz" de Python
-      } catch (err) {
-        agregarLog(`Error al abrir micrófono: ${err}`, "error");
-        setRawGrabandoAll(false);
-        escuchandoRef.current = false;
-      }
+      // ── Modo Whisper local: Python abre el mic del sistema ──
+      // PTT_INICIO pausa el timer en Python (inline en asyncio, sin race condition)
+      // y abre sounddevice InputStream en el PC.
+      enviarControl("PTT_INICIO");
+      setRawGrabandoAll(true);
+      // escuchandoRef se libera cuando llega el mensaje "voz" de Python
     } else {
-      // ── Modo WASM fallback ──
+      // ── Modo WASM fallback: browser captura el mic ──
       if (!whisper.modeloCargado) {
         escuchandoRef.current = false;
         return;
@@ -253,34 +165,27 @@ export function useWebSocket() {
         escuchandoRef.current = false;
       }
     }
-  }, [whisper, agregarLog, enviarComando, enviarControl, iniciarGrabacionRaw, setRawGrabandoAll]);
+  }, [whisper, agregarLog, enviarComando, enviarControl, setRawGrabandoAll]);
 
   useEffect(() => {
     iniciarPTTRef.current = iniciarPTTVoz;
   }, [iniciarPTTVoz]);
 
-  // ---- PTT: finalizar grabación ----
+  // ---- PTT: finalizar ----
 
-  const finalizarPTTExterior = useCallback(async () => {
+  const finalizarPTTExterior = useCallback(() => {
     if (whisperDisponibleRef.current) {
-      // Modo local: detener grabación y enviar audio a Python
+      // Modo local: indicar a Python que el usuario soltó el botón
       if (!rawGrabandoRef.current) return;
+      enviarControl("PTT_FIN");
       setRawGrabandoAll(false);
       setRawProcesandoAll(true);
-
-      const buffer = await finalizarGrabacionRaw();
-      if (buffer && ws.current?.readyState === WebSocket.OPEN) {
-        ws.current.send(buffer);
-        // escuchandoRef y rawProcesando se limpian al recibir mensaje "voz"
-      } else {
-        setRawProcesandoAll(false);
-        escuchandoRef.current = false;
-      }
+      // rawProcesando y escuchandoRef se limpian cuando llega el mensaje "voz"
     } else {
-      // Modo WASM: señalar a useWhisperWASM que pare la grabación
+      // Modo WASM: señalar al hook que corte la grabación
       whisper.finalizarGrabacion();
     }
-  }, [whisper, finalizarGrabacionRaw, setRawGrabandoAll, setRawProcesandoAll]);
+  }, [whisper, enviarControl, setRawGrabandoAll, setRawProcesandoAll]);
 
   // ---- Spacebar PTT — global ----
 
@@ -311,6 +216,14 @@ export function useWebSocket() {
     };
   }, [estadoJuego.conectado, finalizarPTTExterior]); // eslint-disable-line
 
+  // ---- Cargar WASM solo cuando se confirma que Python no tiene Whisper ----
+
+  useEffect(() => {
+    if (estadoJuego.conectado && !whisperLocalActivo) {
+      whisper.cargar();
+    }
+  }, [estadoJuego.conectado, whisperLocalActivo]); // eslint-disable-line
+
   // ---- Procesar mensajes del servidor ----
 
   const procesarMensaje = useCallback(
@@ -325,7 +238,7 @@ export function useWebSocket() {
             setWhisperLocalActivo(disponible);
             agregarLog(
               disponible
-                ? "Simulador listo — Whisper local activo"
+                ? "Simulador listo — Whisper local activo (mic del sistema)"
                 : "Simulador listo — usando Whisper del navegador",
               "sistema"
             );
@@ -397,13 +310,13 @@ export function useWebSocket() {
             break;
 
           case "voz":
-            // Resultado de Whisper local — Python transcribió y procesó
+            // Resultado de Whisper local — Python transcribió y procesó el comando
             siguiente.ultimoTextoWhisper = msg.texto;
             siguiente.ultimaDeteccion    = msg.comando !== "DESCONOCIDO"
               ? (msg.comando as ColorJuego)
               : prev.ultimaDeteccion;
             agregarLog(`"${msg.texto}" → ${msg.comando}`, "voz");
-            // Liberar estado de grabación local
+            // Liberar estado de grabación Python
             setRawProcesandoAll(false);
             setRawGrabandoAll(false);
             escuchandoRef.current = false;
@@ -481,15 +394,15 @@ export function useWebSocket() {
 
   // ---- Props compuestos para UI ----
 
-  const puedoHablar = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado;
-
-  // Combinar estados de ambos modos para mostrar en UI de forma uniforme
-  const grabando      = rawGrabando   || whisper.grabando;
-  const procesando    = rawProcesando || whisper.procesando;
-  const micAbierto    = rawGrabando   || whisper.micAbierto;
+  const puedoHablar    = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado;
+  const grabando       = rawGrabando   || whisper.grabando;
+  const procesando     = rawProcesando || whisper.procesando;
+  const micAbierto     = rawGrabando   || whisper.micAbierto;
   const transcribiendo = grabando || procesando;
-  const nivelMic      = rawGrabando   ? rawNivelMic : (puedoHablar ? whisper.nivelMic : 0);
-  const modeloCargado = whisperLocalActivo || whisper.modeloCargado;
+  const modeloCargado  = whisperLocalActivo || whisper.modeloCargado;
+
+  // Nivel de mic solo disponible en modo WASM (Python mic no envía RMS al browser)
+  const nivelMic = (!whisperLocalActivo && puedoHablar) ? whisper.nivelMic : 0;
 
   const estadoConWhisper: EstadoCliente = {
     ...estadoJuego,
@@ -506,7 +419,6 @@ export function useWebSocket() {
       enviarComando("REINICIAR");
       setEstadoJuego((prev) => ({ ...prev, log: [] }));
     },
-    // Props de voz — unificados independientemente del modo
     whisperLocalActivo,
     whisperProgresoDescarga: whisperLocalActivo ? null : whisper.progresoDescarga,
     whisperNivelMic:         nivelMic,
@@ -514,9 +426,8 @@ export function useWebSocket() {
     whisperMicAbierto:       micAbierto,
     whisperProcesando:       procesando,
     whisperTiempoRestante:   whisperLocalActivo ? null : whisper.tiempoRestante,
-    // PTT
-    iniciarPTT:  iniciarPTTVoz,
-    finalizarPTT: finalizarPTTExterior,
+    iniciarPTT:              iniciarPTTVoz,
+    finalizarPTT:            finalizarPTTExterior,
     puedoHablar,
   };
 }

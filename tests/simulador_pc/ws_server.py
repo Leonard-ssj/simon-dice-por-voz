@@ -1,15 +1,22 @@
 # ============================================================
-# ws_server.py — Servidor WebSocket del simulador
+# ws_server.py — Servidor WebSocket del simulador (Fase 1)
 #
 # Bidireccional:
 #   simulador → panel: eventos del juego (STATE, LED, SEQUENCE, etc.)
-#   panel → simulador: audio PCM binario (PTT) o comando texto (fallback WASM)
+#   panel → simulador: señales de control PTT + comandos fallback WASM
 #
 # Reconocimiento de voz:
-#   PREFERIDO: el browser envía audio Float32 PCM 16kHz como frame binario.
-#              Python transcribe con Whisper local y devuelve el resultado.
-#   FALLBACK:  si Whisper no cargó, el browser usa Whisper WASM y envía
-#              texto como {"tipo": "comando", "comando": "ROJO"}.
+#   PREFERIDO (Whisper local):
+#     Browser envía {"tipo":"control","accion":"PTT_INICIO"} al presionar PTT.
+#     Python abre el micrófono del sistema (sounddevice) y empieza a grabar.
+#     Browser envía {"tipo":"control","accion":"PTT_FIN"} al soltar PTT.
+#     Python para la grabación, transcribe con Whisper local, procesa el comando
+#     y devuelve {"tipo":"voz","texto":"...","comando":"..."} al browser.
+#     El browser NO necesita permisos de micrófono en este modo.
+#
+#   FALLBACK (Whisper WASM):
+#     Si Whisper no cargó, el browser usa Whisper WASM y envía texto:
+#     {"tipo": "comando", "comando": "ROJO"}
 #
 # Thread-safe. Compatible con websockets >= 14.
 # ============================================================
@@ -56,10 +63,11 @@ class ServidorWS:
         self._listo = threading.Event()
 
         # Callbacks
-        self.on_comando           = None  # callback(str)   — fallback: panel manda texto
-        self.on_audio             = None  # callback(bytes) — audio PCM para transcribir
-        self.on_pausar_timeout    = None  # callback()      — pausar timer del juego inmediatamente
-        self.on_cliente_conectado = None  # callback()      — un cliente se conectó
+        self.on_ptt_inicio        = None  # callback() — usuario presionó PTT (abrir mic)
+        self.on_ptt_fin           = None  # callback() — usuario soltó PTT (grabar+transcribir)
+        self.on_pausar_timeout    = None  # callback() — pausar timer ANTES de spawnear hilo
+        self.on_comando           = None  # callback(str) — fallback WASM: panel manda texto
+        self.on_cliente_conectado = None  # callback() — un cliente se conectó
 
         # Whisper local
         self._whisper_model      = None
@@ -86,18 +94,19 @@ class ServidorWS:
             self._whisper_disponible = False
             return False
 
-    def transcribir(self, audio_bytes: bytes) -> tuple[str, str]:
+    def transcribir(self, audio: "bytes | np.ndarray") -> tuple[str, str]:
         """
-        Transcribe audio PCM Float32 16kHz enviado desde el browser.
-        El browser captura con AudioContext({ sampleRate: 16000 }) y envía
-        la concatenación de muestras Float32 como frame binario WebSocket.
-
+        Transcribe audio PCM Float32 16kHz grabado por Python (sounddevice).
+        Acepta numpy array (de detener_grabacion_mic) o bytes como fallback.
         Retorna (texto_raw, comando_canonico).
         """
         if not self._whisper_disponible or self._whisper_model is None:
             return "", "DESCONOCIDO"
 
-        audio_np = np.frombuffer(audio_bytes, dtype=np.float32)
+        if isinstance(audio, bytes):
+            audio_np = np.frombuffer(audio, dtype=np.float32)
+        else:
+            audio_np = np.asarray(audio, dtype=np.float32)
 
         if len(audio_np) < 1600:  # < 0.1s de audio — ignorar
             if DEBUG:
@@ -171,40 +180,51 @@ class ServidorWS:
 
         try:
             async for mensaje in websocket:
+                # Solo mensajes de texto JSON — ya no recibimos frames binarios.
+                # El micrófono lo abre Python directamente (sounddevice).
                 if isinstance(mensaje, bytes):
-                    # Audio PCM Float32 enviado por el browser en modo Whisper local.
-                    # El timer del juego ya fue pausado por el mensaje PTT_INICIO
-                    # que llegó justo antes del audio (misma conexión, orden garantizado).
-                    if self.on_audio:
-                        threading.Thread(
-                            target=self.on_audio,
-                            args=(mensaje,),
-                            daemon=True,
-                            name="whisper-infer",
-                        ).start()
-                else:
-                    # Texto JSON — control, fallback WASM o comandos directos
-                    try:
-                        data = json.loads(mensaje)
-                        tipo = data.get("tipo", "")
+                    continue  # ignorar (no debería llegar en Fase 1)
 
-                        if tipo == "control":
-                            # PTT_INICIO: el usuario acaba de presionar PTT.
-                            # Pausar el timer del juego AQUÍ, en el hilo del WebSocket
-                            # (antes de spawnear el hilo de Whisper) para evitar la
-                            # race condition entre el tick() y _on_audio_recibido().
-                            if data.get("accion") == "PTT_INICIO" and self.on_pausar_timeout:
+                try:
+                    data = json.loads(mensaje)
+                    tipo = data.get("tipo", "")
+
+                    if tipo == "control":
+                        accion = data.get("accion", "")
+
+                        if accion == "PTT_INICIO":
+                            # Pausar timer AQUÍ (hilo asyncio, antes de spawnear)
+                            # para eliminar la race condition con tick().
+                            if self.on_pausar_timeout:
                                 self.on_pausar_timeout()
+                            # Abrir micrófono en hilo separado (sounddevice bloqueante)
+                            if self.on_ptt_inicio:
+                                threading.Thread(
+                                    target=self.on_ptt_inicio,
+                                    daemon=True,
+                                    name="ptt-inicio",
+                                ).start()
 
-                        elif tipo == "comando" and self.on_comando:
-                            threading.Thread(
-                                target=self.on_comando,
-                                args=(data["comando"],),
-                                daemon=True,
-                                name="cmd",
-                            ).start()
-                    except Exception:
-                        pass
+                        elif accion == "PTT_FIN":
+                            # Detener grabación, transcribir y procesar comando
+                            if self.on_ptt_fin:
+                                threading.Thread(
+                                    target=self.on_ptt_fin,
+                                    daemon=True,
+                                    name="ptt-fin",
+                                ).start()
+
+                    elif tipo == "comando" and self.on_comando:
+                        # Fallback WASM: browser transcribió localmente y manda texto
+                        threading.Thread(
+                            target=self.on_comando,
+                            args=(data["comando"],),
+                            daemon=True,
+                            name="cmd",
+                        ).start()
+
+                except Exception:
+                    pass
         except Exception:
             pass
         finally:

@@ -195,6 +195,66 @@ def decir_color(color: str) -> None:
     decir(nombre, bloquear=True)
 
 
+# ---- Grabación del micrófono (para Whisper local) ----
+#
+# Python captura el micrófono del sistema directamente con sounddevice.
+# El browser NO necesita permisos de micrófono cuando usa Whisper local.
+# El browser solo envía señales PTT_INICIO / PTT_FIN via WebSocket.
+
+_mic_stream: "sd.InputStream | None" = None
+_mic_muestras: list = []
+_mic_grabando = False
+
+
+def iniciar_grabacion_mic() -> None:
+    """
+    Abre el micrófono del sistema y empieza a grabar a 16kHz mono float32.
+    Llamar detener_grabacion_mic() para parar y obtener el audio.
+    """
+    global _mic_stream, _mic_muestras, _mic_grabando
+
+    _mic_muestras = []
+    _mic_grabando = True
+
+    def _callback(indata, _frames, _time_info, _status):
+        if _mic_grabando:
+            # indata tiene forma (frames, channels) — tomamos canal 0
+            _mic_muestras.append(indata[:, 0].copy())
+
+    _mic_stream = sd.InputStream(
+        samplerate=SAMPLE_RATE,  # 16000 Hz — mismo que Whisper espera
+        channels=1,
+        dtype="float32",
+        callback=_callback,
+        blocksize=4096,
+    )
+    _mic_stream.start()
+    if DEBUG:
+        print("[MIC] Grabando...")
+
+
+def detener_grabacion_mic() -> np.ndarray:
+    """
+    Para la grabación y devuelve el audio como numpy float32 array 16kHz.
+    Retorna array vacío si no se grabó nada.
+    """
+    global _mic_stream, _mic_grabando
+
+    _mic_grabando = False
+    if _mic_stream:
+        _mic_stream.stop()
+        _mic_stream.close()
+        _mic_stream = None
+
+    if not _mic_muestras:
+        return np.array([], dtype=np.float32)
+
+    audio = np.concatenate(_mic_muestras)
+    if DEBUG:
+        print(f"[MIC] Grabados {len(audio) / SAMPLE_RATE:.1f}s de audio ({len(audio)} muestras)")
+    return audio
+
+
 # ---- Generación y reproducción de tonos ----
 
 def _generar_tono(frecuencia_hz: float, duracion_ms: int) -> np.ndarray:

@@ -35,6 +35,7 @@ from juego_sim import JuegoSimulador, Estado
 from audio_pc import (
     reproducir_sonido,
     inicializar_tts, esperar_tts, decir_color, decir,
+    iniciar_grabacion_mic, detener_grabacion_mic,
 )
 from leds_sim import led_encender, led_apagar, leds_apagar_todos, nueva_linea
 from ws_server import ServidorWS
@@ -196,16 +197,31 @@ def _on_cliente_conectado():
     decir("Di empieza para comenzar.", bloquear=False)
 
 
-def _on_audio_recibido(audio_bytes: bytes):
+def _on_ptt_inicio():
     """
-    Audio PCM Float32 16kHz enviado desde el browser en modo PTT.
-    El timer ya fue pausado por PTT_INICIO antes de recibir el audio;
-    aquí solo transcribimos y reanudamos el timer al terminar.
+    Usuario presionó PTT — abrir micrófono del sistema y empezar a grabar.
+    El timer del juego ya fue pausado inline en el hilo asyncio antes de
+    llamar a esta función (ver ws_server._manejar_cliente).
     """
-    texto, comando = ws.transcribir(audio_bytes)
+    iniciar_grabacion_mic()
+    log("[Voz] Grabando mic...", "voz")
+
+
+def _on_ptt_fin():
+    """
+    Usuario soltó PTT — detener grabación, transcribir con Whisper local y
+    procesar el comando resultante.
+    """
+    audio_np = detener_grabacion_mic()
+
+    if len(audio_np) < 1600:  # < 0.1s de audio — ignorar
+        log("[Voz] Audio demasiado corto, ignorado.", "info")
+        juego.reanudar_timeout()
+        return
+
+    texto, comando = ws.transcribir(audio_np)
     juego.reanudar_timeout()  # reanudar DESPUÉS de transcribir
 
-    # Informar al panel del texto transcripto y el comando resultante
     ws.enviar_voz(texto, comando)
 
     if texto:
@@ -240,7 +256,8 @@ def _registrar_callbacks():
     juego.on_resultado     = _on_resultado
     juego.on_log           = _on_log
 
-    ws.on_audio             = _on_audio_recibido
+    ws.on_ptt_inicio        = _on_ptt_inicio
+    ws.on_ptt_fin           = _on_ptt_fin
     ws.on_pausar_timeout    = juego.pausar_timeout
     ws.on_comando           = _on_comando_panel
     ws.on_cliente_conectado = _on_cliente_conectado

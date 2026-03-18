@@ -48,12 +48,13 @@ export interface UseWhisperWASMReturn {
   micAbierto:       boolean;       // true cuando getUserMedia tuvo éxito
   procesando:       boolean;       // true mientras Whisper hace inferencia
   tiempoRestante:   number | null; // countdown en segundos (solo modo VAD)
+  cargar:           () => void;    // iniciar descarga del modelo (lazy load)
   escuchar:         (onProcesandoInicio?: () => void, modo?: "vad" | "ptt") => Promise<string>;
   finalizarGrabacion: () => void;  // PTT: termina la grabación y envía a Whisper
   cancelarEscucha:  () => void;
 }
 
-export function useWhisperWASM(): UseWhisperWASMReturn {
+export function useWhisperWASM(autoCargar = true): UseWhisperWASMReturn {
   const [modeloCargado,    setModeloCargado]    = useState(false);
   const [transcribiendo,   setTranscribiendo]   = useState(false);
   const [progresoDescarga, setProgresoDescarga] = useState("");
@@ -63,14 +64,18 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
   const [procesando,       setProcesando]       = useState(false);
   const [tiempoRestante,   setTiempoRestante]   = useState<number | null>(null);
 
-  const workerRef   = useRef<Worker | null>(null);
-  const cancelarRef = useRef(false);
-  const resolverRef = useRef<((texto: string) => void) | null>(null);
-  // PTT: almacena la función terminar() para llamarla desde finalizarGrabacion()
-  const terminarRef = useRef<((m: "silencio" | "timeout" | "cancelado") => void) | null>(null);
+  const workerRef    = useRef<Worker | null>(null);
+  const cancelarRef  = useRef(false);
+  const resolverRef  = useRef<((texto: string) => void) | null>(null);
+  const terminarRef  = useRef<((m: "silencio" | "timeout" | "cancelado") => void) | null>(null);
+  const cargandoRef  = useRef(false);
 
-  // ---- Inicializar worker al montar ----
-  useEffect(() => {
+  // ---- Crear worker e iniciar descarga del modelo ----
+  // Idempotente: si ya se llamó o el worker existe, no hace nada.
+  const cargar = useCallback(() => {
+    if (workerRef.current || cargandoRef.current) return;
+    cargandoRef.current = true;
+
     const worker = new Worker(
       new URL("../workers/whisper.worker.ts", import.meta.url)
     );
@@ -98,12 +103,17 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
 
     workerRef.current = worker;
     worker.postMessage({ tipo: "cargar" });
+  }, []); // setters de useState son estables — no necesita deps
 
+  // Auto-cargar si se pide; cleanup al desmontar siempre
+  useEffect(() => {
+    if (autoCargar) cargar();
     return () => {
-      worker.terminate();
+      workerRef.current?.terminate();
       workerRef.current = null;
+      cargandoRef.current = false;
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Cancelar grabación (descarta el audio) ----
   const cancelarEscucha = useCallback(() => {
@@ -298,6 +308,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
     micAbierto,
     procesando,
     tiempoRestante,
+    cargar,
     escuchar,
     finalizarGrabacion,
     cancelarEscucha,
