@@ -34,8 +34,10 @@ export default function Home() {
   const whisperMicAbierto     = activo.whisperMicAbierto ?? false;
   const whisperProcesando       = activo.whisperProcesando ?? false;
   const whisperTiempoRestante   = activo.whisperTiempoRestante ?? null;
-  const micAbiertoEnBackground  = activo.micAbiertoEnBackground ?? false;
   const handleReiniciar         = activo.reiniciar ?? undefined;
+  const iniciarPTT              = activo.iniciarPTT;
+  const finalizarPTT            = activo.finalizarPTT;
+  const puedoHablar             = activo.puedoHablar ?? false;
 
   const handleConectar    = useCallback(() => activo.conectar(),    [activo]);
   const handleDesconectar = useCallback(() => activo.desconectar(), [activo]);
@@ -124,7 +126,9 @@ export default function Home() {
             whisperMicAbierto={whisperMicAbierto}
             whisperProcesando={whisperProcesando}
             enEscucha={estadoJuego.estado === "LISTENING"}
-            micAbiertoEnBackground={micAbiertoEnBackground}
+            puedoHablar={puedoHablar}
+            iniciarPTT={iniciarPTT}
+            finalizarPTT={finalizarPTT}
             onReiniciar={handleReiniciar}
             whisperTiempoRestante={whisperTiempoRestante}
           />

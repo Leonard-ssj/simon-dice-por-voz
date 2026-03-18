@@ -2,8 +2,13 @@
 
 // ============================================================
 // hooks/useWhisperWASM.ts — Whisper en el browser (WASM)
-// Graba el micrófono con VAD y transcribe con Whisper WASM.
+// Graba el micrófono y transcribe con Whisper WASM.
 // El modelo corre en un Web Worker para no bloquear la UI.
+//
+// Modos de grabación:
+//   "vad"  — VAD automático: graba cuando detecta voz por RMS
+//   "ptt"  — Push-to-talk: graba desde que se llama escuchar()
+//            hasta que se llama finalizarGrabacion()
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -13,9 +18,10 @@ const SAMPLE_RATE       = 16000;  // Hz — mismo que Whisper espera
 const BUFFER_SIZE       = 4096;   // muestras por bloque (~256ms a 16kHz)
 const VAD_THRESHOLD     = 0.015;  // RMS mínimo para considerar voz
 const BLOQUES_CONFIRMAR = 1;      // bloques consecutivos para confirmar voz
-const SILENCIO_TOLERADO = 800;    // ms de silencio para cortar — 800ms evita cortar palabras largas
-const DURACION_MINIMA   = 300;    // ms mínimos de audio para enviar a Whisper (filtra ruido corto)
-const TIMEOUT_GRABACION = 12000;  // ms máximos esperando voz antes de timeout
+const SILENCIO_TOLERADO = 800;    // ms de silencio para cortar en modo VAD
+const DURACION_MINIMA   = 300;    // ms mínimos de audio para enviar a Whisper (modo VAD)
+const DURACION_MINIMA_PTT = 80;   // ms mínimos en modo PTT (el usuario controla)
+const TIMEOUT_GRABACION = 15000;  // ms máximos grabando (safety en ambos modos)
 
 // ---- Tipos internos del worker ----
 type MsgWorker =
@@ -37,12 +43,13 @@ export interface UseWhisperWASMReturn {
   modeloCargado:    boolean;
   transcribiendo:   boolean;
   progresoDescarga: string;
-  nivelMic:         number;        // RMS actual del mic normalizado 0-1 (para la barra de nivel)
-  grabando:         boolean;       // true cuando VAD detectó voz y está grabando activamente
-  micAbierto:       boolean;       // true cuando getUserMedia tuvo éxito (mic abierto)
-  procesando:       boolean;       // true mientras Whisper hace inferencia del audio
-  tiempoRestante:   number | null; // countdown en segundos hasta timeout (null = no escuchando)
-  escuchar:         (onProcesandoInicio?: () => void) => Promise<string>;
+  nivelMic:         number;        // RMS actual del mic normalizado 0-1
+  grabando:         boolean;       // true cuando está grabando audio activamente
+  micAbierto:       boolean;       // true cuando getUserMedia tuvo éxito
+  procesando:       boolean;       // true mientras Whisper hace inferencia
+  tiempoRestante:   number | null; // countdown en segundos (solo modo VAD)
+  escuchar:         (onProcesandoInicio?: () => void, modo?: "vad" | "ptt") => Promise<string>;
+  finalizarGrabacion: () => void;  // PTT: termina la grabación y envía a Whisper
   cancelarEscucha:  () => void;
 }
 
@@ -52,13 +59,15 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
   const [progresoDescarga, setProgresoDescarga] = useState("");
   const [nivelMic,         setNivelMic]         = useState(0);
   const [grabando,         setGrabando]         = useState(false);
-  const [micAbierto,       setMicAbierto]       = useState(false);  // true cuando getUserMedia tuvo éxito
-  const [procesando,       setProcesando]       = useState(false);  // Whisper procesando audio
+  const [micAbierto,       setMicAbierto]       = useState(false);
+  const [procesando,       setProcesando]       = useState(false);
   const [tiempoRestante,   setTiempoRestante]   = useState<number | null>(null);
 
   const workerRef   = useRef<Worker | null>(null);
   const cancelarRef = useRef(false);
   const resolverRef = useRef<((texto: string) => void) | null>(null);
+  // PTT: almacena la función terminar() para llamarla desde finalizarGrabacion()
+  const terminarRef = useRef<((m: "silencio" | "timeout" | "cancelado") => void) | null>(null);
 
   // ---- Inicializar worker al montar ----
   useEffect(() => {
@@ -96,13 +105,21 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
     };
   }, []);
 
-  // ---- Cancelar grabación en curso ----
+  // ---- Cancelar grabación (descarta el audio) ----
   const cancelarEscucha = useCallback(() => {
     cancelarRef.current = true;
   }, []);
 
-  // ---- Grabar micrófono con VAD y transcribir ----
-  const escuchar = useCallback((onProcesandoInicio?: () => void): Promise<string> => {
+  // ---- Finalizar grabación PTT (procesa el audio grabado hasta ahora) ----
+  const finalizarGrabacion = useCallback(() => {
+    terminarRef.current?.("silencio");
+  }, []);
+
+  // ---- Grabar micrófono y transcribir ----
+  const escuchar = useCallback((
+    onProcesandoInicio?: () => void,
+    modo: "vad" | "ptt" = "vad"
+  ): Promise<string> => {
     return new Promise((resolve) => {
       if (!modeloCargado || transcribiendo) {
         resolve("");
@@ -111,8 +128,6 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
 
       cancelarRef.current = false;
       resolverRef.current = resolve;
-      // transcribiendo=true desactiva el botón para evitar llamadas dobles,
-      // pero el badge "Habla ahora" solo aparece cuando el mic realmente abre (micAbierto).
       setTranscribiendo(true);
 
       let audioCtx:       AudioContext | null      = null;
@@ -132,6 +147,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
       function terminar(motivo: "silencio" | "timeout" | "cancelado") {
         if (finalizado) return;
         finalizado = true;
+        terminarRef.current = null;
 
         // Limpiar timers
         if (timeoutHandle)     clearTimeout(timeoutHandle);
@@ -150,7 +166,8 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
         setMicAbierto(false);
         setTiempoRestante(null);
 
-        if (motivo === "cancelado" || muestrasAcumuladas.length === 0 || duracionMs < DURACION_MINIMA) {
+        const duracionMinima = modo === "ptt" ? DURACION_MINIMA_PTT : DURACION_MINIMA;
+        if (motivo === "cancelado" || muestrasAcumuladas.length === 0 || duracionMs < duracionMinima) {
           setTranscribiendo(false);
           resolve("");
           resolverRef.current = null;
@@ -172,6 +189,9 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
         // resolve() se llama desde onmessage cuando llega el resultado
       }
 
+      // Guardar referencia para PTT
+      terminarRef.current = terminar;
+
       async function iniciarGrabacion() {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
@@ -187,17 +207,22 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
           sourceNode    = audioCtx.createMediaStreamSource(stream);
           processorNode = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
-          // El mic está abierto — mostrar badge "Habla ahora"
           setMicAbierto(true);
 
-          // Countdown desde que abre el mic
-          const inicioEscucha = Date.now();
-          setTiempoRestante(Math.round(TIMEOUT_GRABACION / 1000));
-          countdownInterval = setInterval(() => {
-            const elapsed    = Date.now() - inicioEscucha;
-            const remaining  = Math.max(0, Math.round((TIMEOUT_GRABACION - elapsed) / 1000));
-            setTiempoRestante(remaining);
-          }, 500);
+          // En PTT: empezar a grabar inmediatamente
+          if (modo === "ptt") {
+            grabandoVoz = true;
+            setGrabando(true);
+          } else {
+            // VAD: countdown
+            const inicioEscucha = Date.now();
+            setTiempoRestante(Math.round(TIMEOUT_GRABACION / 1000));
+            countdownInterval = setInterval(() => {
+              const elapsed   = Date.now() - inicioEscucha;
+              const remaining = Math.max(0, Math.round((TIMEOUT_GRABACION - elapsed) / 1000));
+              setTiempoRestante(remaining);
+            }, 500);
+          }
 
           processorNode.onaudioprocess = (e) => {
             if (finalizado || cancelarRef.current) {
@@ -209,31 +234,37 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
             const rms      = calcularRMS(canal);
             const msBloque = (BUFFER_SIZE / SAMPLE_RATE) * 1000;
 
-            // Actualizar barra de nivel de micrófono (normalizado 0-1)
             setNivelMic(Math.min(1, rms / (VAD_THRESHOLD * 4)));
 
-            if (rms >= VAD_THRESHOLD) {
-              bloquesVoz++;
-              if (bloquesVoz >= BLOQUES_CONFIRMAR) {
-                if (!grabandoVoz) {
-                  grabandoVoz = true;
-                  setGrabando(true);  // VAD confirmado — grabando voz activamente
-                }
-                if (silencioHandle) {
-                  clearTimeout(silencioHandle);
-                  silencioHandle = null;
-                }
-              }
-            } else {
-              bloquesVoz = 0;
-              if (grabandoVoz && !silencioHandle) {
-                silencioHandle = setTimeout(() => terminar("silencio"), SILENCIO_TOLERADO);
-              }
-            }
-
-            if (grabandoVoz) {
+            if (modo === "ptt") {
+              // PTT: siempre graba, sin detección de silencio automática
               muestrasAcumuladas.push(new Float32Array(canal));
               duracionMs += msBloque;
+            } else {
+              // VAD: lógica de detección por umbral RMS
+              if (rms >= VAD_THRESHOLD) {
+                bloquesVoz++;
+                if (bloquesVoz >= BLOQUES_CONFIRMAR) {
+                  if (!grabandoVoz) {
+                    grabandoVoz = true;
+                    setGrabando(true);
+                  }
+                  if (silencioHandle) {
+                    clearTimeout(silencioHandle);
+                    silencioHandle = null;
+                  }
+                }
+              } else {
+                bloquesVoz = 0;
+                if (grabandoVoz && !silencioHandle) {
+                  silencioHandle = setTimeout(() => terminar("silencio"), SILENCIO_TOLERADO);
+                }
+              }
+
+              if (grabandoVoz) {
+                muestrasAcumuladas.push(new Float32Array(canal));
+                duracionMs += msBloque;
+              }
             }
           };
 
@@ -242,7 +273,8 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
 
           timeoutHandle = setTimeout(() => terminar("timeout"), TIMEOUT_GRABACION);
         } catch (err) {
-          console.error("[Whisper VAD] Error accediendo al micrófono:", err);
+          console.error("[Whisper PTT] Error accediendo al micrófono:", err);
+          terminarRef.current = null;
           setTranscribiendo(false);
           setNivelMic(0);
           setGrabando(false);
@@ -267,6 +299,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
     procesando,
     tiempoRestante,
     escuchar,
+    finalizarGrabacion,
     cancelarEscucha,
   };
 }

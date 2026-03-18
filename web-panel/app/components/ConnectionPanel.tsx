@@ -22,7 +22,9 @@ interface Props {
   whisperTiempoRestante?: number | null; // countdown en segundos
   whisperProcesando?: boolean;     // Whisper procesando audio (inferencia)
   enEscucha?: boolean;             // estado LISTENING activo (juego pide voz)
-  micAbiertoEnBackground?: boolean; // mic abierto en IDLE/GAMEOVER (esperando "empieza")
+  puedoHablar?: boolean;           // PTT habilitado en el estado actual
+  iniciarPTT?: () => void;         // iniciar grabación PTT
+  finalizarPTT?: () => void;       // finalizar grabación PTT
   onReiniciar?: () => void;        // callback para reiniciar el juego
 }
 
@@ -40,10 +42,11 @@ export default function ConnectionPanel({
   whisperNivelMic = 0,
   whisperGrabando = false,
   whisperMicAbierto = false,
-  whisperTiempoRestante = null,
   whisperProcesando = false,
   enEscucha = false,
-  micAbiertoEnBackground = false,
+  puedoHablar = false,
+  iniciarPTT,
+  finalizarPTT,
   onReiniciar,
 }: Props) {
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
@@ -98,15 +101,36 @@ export default function ConnectionPanel({
       {/* Badge + barra de nivel de Whisper */}
       {mostrarWhisper && (
         <div className="flex items-center gap-2">
-          {/* Badge background — mic abierto en IDLE/GAMEOVER esperando "empieza" */}
-          {micAbiertoEnBackground && !enEscucha && !whisperTranscribiendo ? (
-            <span className={cn(
-              "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
-              dark ? "bg-white/5 text-white/35" : "bg-slate-100 text-slate-400"
-            )}>
-              <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-pulse" />
-              Di «empieza»
-            </span>
+          {/* Botón PTT — mantener presionado para hablar */}
+          {puedoHablar && iniciarPTT && finalizarPTT ? (
+            <button
+              onMouseDown={iniciarPTT}
+              onMouseUp={finalizarPTT}
+              onMouseLeave={finalizarPTT}
+              onTouchStart={(e) => { e.preventDefault(); iniciarPTT(); }}
+              onTouchEnd={finalizarPTT}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold select-none transition-colors",
+                whisperTranscribiendo
+                  ? whisperGrabando
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    : whisperProcesando
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                      : "bg-blue-500/15 text-blue-300 border border-blue-500/20"
+                  : dark
+                    ? "bg-white/8 text-white/60 hover:bg-indigo-500/20 hover:text-indigo-300 border border-white/10"
+                    : "bg-slate-100 text-slate-500 hover:bg-indigo-100 hover:text-indigo-600 border border-slate-200"
+              )}
+            >
+              <Mic size={12} className={whisperGrabando ? "text-emerald-400" : ""} />
+              {whisperTranscribiendo
+                ? whisperGrabando
+                  ? "Grabando..."
+                  : whisperProcesando
+                    ? "Procesando..."
+                    : "Abriendo mic..."
+                : "Mantén para hablar"}
+            </button>
           ) : null}
 
           {/* Badge de estado — LISTENING pero mic aún no abierto */}

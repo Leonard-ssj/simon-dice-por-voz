@@ -3,17 +3,13 @@
 // ============================================================
 // hooks/useWebSocket.ts — Modo Simulador PC
 //
-// Se conecta al simulador Python (tests/simulador_pc) via WebSocket.
-// El browser graba el micrófono, transcribe con Whisper WASM y manda
-// el comando reconocido al simulador via WebSocket:
-//   {"tipo": "comando", "comando": "ROJO"}
+// Conecta al simulador Python via WebSocket.
+// Reconocimiento de voz: Push-to-Talk (PTT).
+//   Barra espaciadora (o botón en UI) → abre mic → usuario habla
+//   → suelta → Whisper WASM transcribe → comando enviado al juego.
 //
-// El simulador Python recibe los comandos y corre el juego
-// (LEDs ANSI, tonos, TTS narrador), igual que lo haría el ESP32.
-//
-// Bucle continuo de voz (bucleVoz): escucha en todos los estados
-// que aceptan comandos: IDLE, LISTENING, PAUSA, GAMEOVER.
-// Permite decir "empieza" desde IDLE sin acción manual.
+// Sin bucle continuo, sin ventanas de silencio. El usuario
+// controla exactamente cuándo el micrófono está activo.
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,7 +17,7 @@ import type { EstadoCliente, EstadoJuego, MensajeWS, ColorJuego, ResultadoTurno 
 import { useWhisperWASM } from "./useWhisperWASM";
 import { textoAComando } from "../lib/validador";
 
-// Estados del juego en los que el browser debe escuchar comandos de voz
+// Estados en los que el usuario puede hablar
 const ESTADOS_ESCUCHA = new Set<string>(["IDLE", "LISTENING", "PAUSA", "GAMEOVER"]);
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8765";
@@ -29,7 +25,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8765";
 const NOMBRES_ESTADO: Record<string, string> = {
   IDLE:       "Esperando",
   SHOWING:    "Mostrando secuencia",
-  LISTENING:  "Escuchando — habla ahora",
+  LISTENING:  "Tu turno — habla",
   EVALUATING: "Procesando...",
   CORRECT:    "¡Correcto!",
   LEVEL_UP:   "¡Nivel superado!",
@@ -58,19 +54,15 @@ let contadorLog = 0;
 
 export function useWebSocket() {
   const [estadoJuego, setEstadoJuego] = useState<EstadoCliente>(ESTADO_INICIAL);
-  const ws = useRef<WebSocket | null>(null);
-  const escuchandoVozRef  = useRef(false);
-  const bucleVozActivoRef = useRef(false);
-  const estadoRef         = useRef<EstadoJuego>("IDLE");
-  // Ref que siempre apunta a la versión más reciente de iniciarEscuchaVoz
-  const iniciarEscuchaRef = useRef<() => Promise<void>>(async () => {});
-  // Ventana de silencio — mientras Date.now() < silencioHastaRef, el mic NO abre.
-  // Evita que el mic capture el TTS del simulador Python como comandos de voz.
-  const silencioHastaRef = useRef<number>(0);
-  // Evita loguear "Escuchando..." más de una vez por sesión de LISTENING
-  const yaLogueadoEscuchandoRef = useRef(false);
+  const ws              = useRef<WebSocket | null>(null);
+  const escuchandoRef   = useRef(false);   // evita inicios simultáneos de PTT
+  const estadoRef       = useRef<EstadoJuego>("IDLE");
+  // Ref a la versión más reciente de iniciarPTTVoz (evita stale closure en useEffect)
+  const iniciarPTTRef   = useRef<() => void>(() => {});
 
   const whisper = useWhisperWASM();
+
+  // ---- Helpers ----
 
   const agregarLog = useCallback(
     (mensaje: string, tipo: "info" | "correcto" | "error" | "voz" | "sistema" = "info") => {
@@ -78,55 +70,43 @@ export function useWebSocket() {
         ...prev,
         log: [
           { id: contadorLog++, ts: Date.now(), mensaje, tipo },
-          ...prev.log.slice(0, 99), // máximo 100 entradas
+          ...prev.log.slice(0, 99),
         ],
       }));
     },
     []
   );
 
-  // ---- Enviar comando al servidor Python via WebSocket ----
   const enviarComando = useCallback((comando: string) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ tipo: "comando", comando }));
     }
   }, []);
 
-  // ---- Escucha de voz con Whisper WASM (igual que en modo Serial) ----
-  const iniciarEscuchaVoz = useCallback(async () => {
-    if (escuchandoVozRef.current || !whisper.modeloCargado) return;
-    // No abrir el mic durante la ventana de silencio (TTS hablando)
-    if (Date.now() < silencioHastaRef.current) {
-      escuchandoVozRef.current = false;
-      return;
-    }
-    escuchandoVozRef.current = true;
+  // ---- PTT: iniciar grabación ----
+  const iniciarPTTVoz = useCallback(async () => {
+    if (escuchandoRef.current || !whisper.modeloCargado) return;
+    if (!ESTADOS_ESCUCHA.has(estadoRef.current)) return;
 
-    // Solo loguear "Escuchando..." UNA VEZ por sesión de LISTENING (no cada iteración del bucle)
-    if (estadoRef.current === "LISTENING" && !yaLogueadoEscuchandoRef.current) {
-      yaLogueadoEscuchandoRef.current = true;
-      agregarLog("Escuchando... habla ahora", "sistema");
-    }
+    escuchandoRef.current = true;
 
-    // Callback que pausa el timer del juego mientras Whisper hace inferencia
+    // Callback que pausa el timer del juego mientras Whisper infiere
     const onProcesandoInicio = estadoRef.current === "LISTENING"
       ? () => enviarComando("WHISPER_PROCESANDO")
       : undefined;
 
     try {
-      const textoRaw = await whisper.escuchar(onProcesandoInicio);
+      const textoRaw = await whisper.escuchar(onProcesandoInicio, "ptt");
       const comando  = textoAComando(textoRaw);
 
-      // Solo loguear en LISTENING — en IDLE/GAMEOVER escuchamos en segundo plano sin spam
-      if (textoRaw && estadoRef.current === "LISTENING") {
+      if (textoRaw) {
         agregarLog(`"${textoRaw}" → ${comando}`, "voz");
       }
 
       setEstadoJuego((prev) => ({
         ...prev,
-        ultimoTextoWhisper:    textoRaw || prev.ultimoTextoWhisper,
-        ultimaDeteccion:       comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
-        whisperTranscribiendo: false,
+        ultimoTextoWhisper: textoRaw || prev.ultimoTextoWhisper,
+        ultimaDeteccion:    comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
       }));
 
       if (comando !== "DESCONOCIDO") {
@@ -134,39 +114,46 @@ export function useWebSocket() {
       }
     } catch (err) {
       agregarLog(`Error en reconocimiento de voz: ${err}`, "error");
-      setEstadoJuego((prev) => ({ ...prev, whisperTranscribiendo: false }));
     } finally {
-      escuchandoVozRef.current = false;
+      escuchandoRef.current = false;
     }
   }, [whisper, agregarLog, enviarComando]);
 
-  // Mantener la ref siempre apuntando a la versión actualizada
+  // Mantener ref actualizada (para el useEffect de spacebar)
   useEffect(() => {
-    iniciarEscuchaRef.current = iniciarEscuchaVoz;
-  }, [iniciarEscuchaVoz]);
+    iniciarPTTRef.current = iniciarPTTVoz;
+  }, [iniciarPTTVoz]);
 
-  // Bucle continuo de escucha — activo para todos los estados que aceptan voz
-  const bucleVoz = useCallback(async () => {
-    const dormir = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-    while (bucleVozActivoRef.current) {
-      if (ESTADOS_ESCUCHA.has(estadoRef.current)) {
-        const t = Date.now();
-        await iniciarEscuchaRef.current();
-        if (!bucleVozActivoRef.current) break;
-        const elapsed = Date.now() - t;
-        // Retorno rápido (< 300ms): modelo aún no listo o ya escuchando → espera corta
-        // En LISTENING: espera 1.5s para que el juego procese antes de volver a escuchar.
-        // En otros estados (IDLE, GAMEOVER): espera más para no saturar con alucinaciones.
-        const enEscuchaActiva = estadoRef.current === "LISTENING";
-        // En LISTENING: 1.5s para que el juego procese antes de volver a escuchar.
-        // En IDLE/GAMEOVER: 500ms — casi continuo para no perder el "empieza".
-        await dormir(elapsed < 300 ? 400 : enEscuchaActiva ? 1500 : 500);
-      } else {
-        await dormir(200);
+  // ---- Spacebar PTT — global ----
+  useEffect(() => {
+    if (!estadoJuego.conectado) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      // No interceptar espacio en inputs o botones
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+      e.preventDefault();
+      if (ESTADOS_ESCUCHA.has(estadoRef.current) && !escuchandoRef.current) {
+        iniciarPTTRef.current();
       }
-    }
-  }, []); // sin deps: usa solo refs
+    };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      e.preventDefault();
+      whisper.finalizarGrabacion();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup",   handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup",   handleKeyUp);
+    };
+  }, [estadoJuego.conectado, whisper.finalizarGrabacion]); // eslint-disable-line
+
+  // ---- Procesar mensajes del servidor ----
   const procesarMensaje = useCallback(
     (msg: MensajeWS) => {
       setEstadoJuego((prev) => {
@@ -186,19 +173,12 @@ export function useWebSocket() {
             if (msg.estado !== "SHOWING") {
               siguiente.ledActivo = null;
             }
-            // Nuevo ciclo: limpiar datos del turno anterior
             if (msg.estado === "SHOWING") {
+              // Cancelar cualquier grabación activa mientras muestra LEDs
               whisper.cancelarEscucha();
               siguiente.ultimaDeteccion    = null;
               siguiente.ultimoTextoWhisper = null;
               siguiente.ultimoResultado    = null;
-            }
-            // Cuando empieza LISTENING: dar 1.5s para que el TTS "Tu turno." termine
-            // antes de abrir el mic. Usar max() para no clobber ventanas de silencio más largas.
-            if (msg.estado === "LISTENING") {
-              yaLogueadoEscuchandoRef.current = false;  // resetear log-once para este turno
-              const finMuteMinimo = Date.now() + 1500;
-              silencioHastaRef.current = Math.max(silencioHastaRef.current, finMuteMinimo);
             }
             agregarLog(`Estado: ${NOMBRES_ESTADO[msg.estado] ?? msg.estado}`, "info");
             break;
@@ -216,16 +196,10 @@ export function useWebSocket() {
             siguiente.ultimoResultado = msg.resultado as ResultadoTurno;
             if (msg.resultado === "CORRECT") {
               agregarLog("Correcto ✓", "correcto");
-              // TTS dice "Correcto. Nivel N." (~2s) — silenciar mic
-              silencioHastaRef.current = Date.now() + 2500;
             } else if (msg.resultado === "WRONG") {
               agregarLog("Incorrecto ✗", "error");
-              // TTS dice "Incorrecto. Di empieza para intentar de nuevo." (~4s)
-              silencioHastaRef.current = Date.now() + 4500;
             } else {
               agregarLog("Tiempo agotado ⏱", "error");
-              // TTS dice "Tiempo agotado. Di empieza para intentar de nuevo." (~4s)
-              silencioHastaRef.current = Date.now() + 4500;
             }
             break;
 
@@ -253,8 +227,6 @@ export function useWebSocket() {
             siguiente.ultimaDeteccion = null;
             siguiente.ultimoTextoWhisper = null;
             agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
-            // TTS dice "Fin del juego. Obtuviste X puntos. Di empieza para volver a jugar." (~6s)
-            silencioHastaRef.current = Date.now() + 7000;
             break;
 
           case "voz":
@@ -273,6 +245,7 @@ export function useWebSocket() {
     [agregarLog, whisper]
   );
 
+  // ---- Conectar ----
   const conectar = useCallback(() => {
     if (ws.current?.readyState === WebSocket.OPEN ||
         ws.current?.readyState === WebSocket.CONNECTING) return;
@@ -282,12 +255,7 @@ export function useWebSocket() {
 
     socket.onopen = () => {
       setEstadoJuego((prev) => ({ ...prev, conectado: true }));
-      agregarLog("Conexión WebSocket establecida", "sistema");
-      // Silenciar mic durante la narración de bienvenida del TTS Python (~18s, 5 frases)
-      silencioHastaRef.current = Date.now() + 20000;
-      // Arrancar el bucle continuo de voz
-      bucleVozActivoRef.current = true;
-      bucleVoz();
+      agregarLog("Conectado. Presiona ESPACIO o el botón para hablar.", "sistema");
     };
 
     socket.onmessage = (event) => {
@@ -304,7 +272,6 @@ export function useWebSocket() {
     };
 
     socket.onclose = () => {
-      bucleVozActivoRef.current = false;
       whisper.cancelarEscucha();
       setEstadoJuego((prev) => ({ ...prev, conectado: false }));
       agregarLog("Conexión cerrada", "sistema");
@@ -312,10 +279,10 @@ export function useWebSocket() {
     };
 
     ws.current = socket;
-  }, [agregarLog, procesarMensaje, bucleVoz, whisper]);
+  }, [agregarLog, procesarMensaje, whisper]);
 
+  // ---- Desconectar ----
   const desconectar = useCallback(() => {
-    bucleVozActivoRef.current = false;
     whisper.cancelarEscucha();
     ws.current?.close();
   }, [whisper]);
@@ -325,23 +292,20 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      ws.current?.close();
-    };
+    return () => { ws.current?.close(); };
   }, []);
 
-  // El badge de "Habla ahora" solo se muestra cuando el juego está en LISTENING.
-  // En IDLE/GAMEOVER el bucle escucha en silencio para detectar "empieza".
-  const enListening = estadoJuego.estado === "LISTENING";
+  // Mostrar estado de mic en todos los estados de escucha (no solo LISTENING)
+  const puedoHablar = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado;
 
   const estadoConWhisper: EstadoCliente = {
     ...estadoJuego,
     whisperCargado:        whisper.modeloCargado,
-    whisperTranscribiendo: whisper.transcribiendo && enListening,
+    whisperTranscribiendo: whisper.transcribiendo,
   };
 
   return {
-    estadoJuego:              estadoConWhisper,
+    estadoJuego:             estadoConWhisper,
     conectar,
     desconectar,
     limpiarLog,
@@ -349,14 +313,16 @@ export function useWebSocket() {
       enviarComando("REINICIAR");
       setEstadoJuego((prev) => ({ ...prev, log: [] }));
     },
-    whisperProgresoDescarga:  whisper.progresoDescarga,
-    whisperNivelMic:          enListening ? whisper.nivelMic : 0,
-    whisperGrabando:          whisper.grabando && enListening,
-    whisperMicAbierto:        whisper.micAbierto && enListening,
-    whisperProcesando:        whisper.procesando && enListening,
-    whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
-    // Mic abierto en background (IDLE/GAMEOVER) — para mostrar badge "Di empieza"
-    micAbiertoEnBackground:   whisper.micAbierto && !enListening &&
-                              (estadoJuego.estado === "IDLE" || estadoJuego.estado === "GAMEOVER"),
+    // Props de Whisper — visibles en todos los estados de escucha
+    whisperProgresoDescarga: whisper.progresoDescarga,
+    whisperNivelMic:         puedoHablar ? whisper.nivelMic : 0,
+    whisperGrabando:         whisper.grabando,
+    whisperMicAbierto:       whisper.micAbierto,
+    whisperProcesando:       whisper.procesando,
+    whisperTiempoRestante:   whisper.tiempoRestante,
+    // PTT — funciones para el botón en UI
+    iniciarPTT:              iniciarPTTVoz,
+    finalizarPTT:            whisper.finalizarGrabacion,
+    puedoHablar,
   };
 }

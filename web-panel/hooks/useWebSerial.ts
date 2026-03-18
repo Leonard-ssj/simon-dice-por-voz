@@ -4,14 +4,9 @@
 // hooks/useWebSerial.ts — Modo ESP32 (producción)
 //
 // Conecta directamente al ESP32 via Web Serial API (Chrome/Edge).
-// El browser graba el micrófono, transcribe con Whisper WASM y
-// escribe el comando reconocido por Serial: "ROJO\n"
-//
-// El ESP32 recibe el texto del comando y corre el juego
-// (LEDs físicos, buzzer, lógica). No graba audio propio.
-//
-// Bucle continuo de voz (bucleVoz): escucha en todos los estados
-// que aceptan comandos: IDLE, LISTENING, PAUSA, GAMEOVER.
+// Reconocimiento de voz: Push-to-Talk (PTT).
+//   Barra espaciadora (o botón) → abre mic → usuario habla
+//   → suelta → Whisper WASM transcribe → "ROJO\n" al ESP32.
 //
 // Requisito: Chrome o Edge (Web Serial API no disponible en Firefox).
 // ============================================================
@@ -21,9 +16,7 @@ import type { EstadoCliente, EstadoJuego, ColorJuego, ResultadoTurno } from "../
 import { useWhisperWASM } from "./useWhisperWASM";
 import { textoAComando } from "../lib/validador";
 
-// Estados del juego en los que el browser debe escuchar comandos de voz
 const ESTADOS_ESCUCHA = new Set<string>(["IDLE", "LISTENING", "PAUSA", "GAMEOVER"]);
-
 const BAUD_RATE = 115200;
 
 let contadorLog = 0;
@@ -47,18 +40,12 @@ const ESTADO_INICIAL: EstadoCliente = {
 export function useWebSerial() {
   const [estadoJuego, setEstadoJuego] = useState<EstadoCliente>(ESTADO_INICIAL);
 
-  const puertoRef         = useRef<any>(null);
-  const escritorRef       = useRef<WritableStreamDefaultWriter | null>(null);
-  const leyendoRef        = useRef(false);
-  const escuchandoVozRef  = useRef(false);
-  const bucleVozActivoRef = useRef(false);
-  const estadoRef         = useRef<EstadoJuego>("IDLE");
-  // Ref que siempre apunta a la versión más reciente de iniciarEscuchaVoz
-  const iniciarEscuchaRef = useRef<() => Promise<void>>(async () => {});
-  // Ventana de silencio — mientras Date.now() < silencioHastaRef, el mic NO abre.
-  const silencioHastaRef = useRef<number>(0);
-  // Evita loguear "Escuchando..." más de una vez por sesión de LISTENING
-  const yaLogueadoEscuchandoRef = useRef(false);
+  const puertoRef       = useRef<any>(null);
+  const escritorRef     = useRef<WritableStreamDefaultWriter | null>(null);
+  const leyendoRef      = useRef(false);
+  const escuchandoRef   = useRef(false);
+  const estadoRef       = useRef<EstadoJuego>("IDLE");
+  const iniciarPTTRef   = useRef<() => void>(() => {});
 
   const whisper = useWhisperWASM();
 
@@ -89,38 +76,26 @@ export function useWebSerial() {
     }
   }, [agregarLog]);
 
-  // ---- Grabación de voz + Whisper ----
+  // ---- PTT: iniciar grabación ----
+  const iniciarPTTVoz = useCallback(async () => {
+    if (escuchandoRef.current || !whisper.modeloCargado) return;
+    if (!ESTADOS_ESCUCHA.has(estadoRef.current)) return;
 
-  const iniciarEscuchaVoz = useCallback(async () => {
-    if (escuchandoVozRef.current || !whisper.modeloCargado) return;
-    // No abrir el mic durante la ventana de silencio (TTS hablando)
-    if (Date.now() < silencioHastaRef.current) {
-      escuchandoVozRef.current = false;
-      return;
-    }
-    escuchandoVozRef.current = true;
-
-    // Solo loguear "Escuchando..." UNA VEZ por sesión de LISTENING
-    if (estadoRef.current === "LISTENING" && !yaLogueadoEscuchandoRef.current) {
-      yaLogueadoEscuchandoRef.current = true;
-      agregarLog("Escuchando... habla ahora", "sistema");
-    }
+    escuchandoRef.current = true;
 
     try {
       // No enviamos WHISPER_PROCESANDO al ESP32 (firmware no lo entiende)
-      const textoRaw = await whisper.escuchar();
+      const textoRaw = await whisper.escuchar(undefined, "ptt");
       const comando  = textoAComando(textoRaw);
 
-      // Solo loguear en LISTENING — en IDLE/GAMEOVER escuchamos en segundo plano sin spam
-      if (textoRaw && estadoRef.current === "LISTENING") {
+      if (textoRaw) {
         agregarLog(`"${textoRaw}" → ${comando}`, "voz");
       }
 
       setEstadoJuego((prev) => ({
         ...prev,
-        ultimoTextoWhisper:  textoRaw || prev.ultimoTextoWhisper,
-        ultimaDeteccion:     comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
-        whisperTranscribiendo: false,
+        ultimoTextoWhisper: textoRaw || prev.ultimoTextoWhisper,
+        ultimaDeteccion:    comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
       }));
 
       if (comando !== "DESCONOCIDO") {
@@ -128,40 +103,44 @@ export function useWebSerial() {
       }
     } catch (err) {
       agregarLog(`Error en reconocimiento de voz: ${err}`, "error");
-      setEstadoJuego((prev) => ({ ...prev, whisperTranscribiendo: false }));
     } finally {
-      escuchandoVozRef.current = false;
+      escuchandoRef.current = false;
     }
   }, [whisper, agregarLog, enviarComandoSerial]);
 
-  // Mantener la ref siempre apuntando a la versión actualizada
   useEffect(() => {
-    iniciarEscuchaRef.current = iniciarEscuchaVoz;
-  }, [iniciarEscuchaVoz]);
+    iniciarPTTRef.current = iniciarPTTVoz;
+  }, [iniciarPTTVoz]);
 
-  // Bucle continuo de escucha — activo para todos los estados que aceptan voz.
-  // Sin deps: usa solo refs para evitar problemas de closure estale.
-  const bucleVoz = useCallback(async () => {
-    const dormir = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-    while (bucleVozActivoRef.current) {
-      if (ESTADOS_ESCUCHA.has(estadoRef.current)) {
-        const t = Date.now();
-        await iniciarEscuchaRef.current();
-        if (!bucleVozActivoRef.current) break;
-        const elapsed = Date.now() - t;
-        // Retorno rápido (< 300ms): modelo no listo o ya escuchando → espera corta
-        // Sesión real completada: espera 1.5s para que el ESP32 procese el comando
-        // antes de volver a escuchar. Evita disparos en cadena de alucinaciones.
-        const enEscuchaActiva = estadoRef.current === "LISTENING";
-        await dormir(elapsed < 300 ? 400 : enEscuchaActiva ? 1500 : 500);
-      } else {
-        await dormir(200);
+  // ---- Spacebar PTT — global ----
+  useEffect(() => {
+    if (!estadoJuego.conectado) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON") return;
+      e.preventDefault();
+      if (ESTADOS_ESCUCHA.has(estadoRef.current) && !escuchandoRef.current) {
+        iniciarPTTRef.current();
       }
-    }
-  }, []); // sin deps: usa solo refs
+    };
 
-  // ---- Procesar líneas de texto del ESP32 ----
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      e.preventDefault();
+      whisper.finalizarGrabacion();
+    };
 
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup",   handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup",   handleKeyUp);
+    };
+  }, [estadoJuego.conectado, whisper.finalizarGrabacion]); // eslint-disable-line
+
+  // ---- Procesar líneas del ESP32 ----
   const procesarLinea = useCallback(
     (linea: string) => {
       if (!linea) return;
@@ -176,7 +155,6 @@ export function useWebSerial() {
           siguiente.estado = nuevoEstado;
           estadoRef.current = nuevoEstado;
 
-          // Al entrar en SHOWING no se necesita voz — cancelar si hubiera grabación activa
           if (nuevoEstado === "SHOWING") {
             whisper.cancelarEscucha();
           }
@@ -185,13 +163,6 @@ export function useWebSerial() {
           }
           if (nuevoEstado !== "SHOWING") {
             siguiente.ledActivo = null;
-          }
-          // Cuando empieza LISTENING: dar 1.5s para que el sonido del ESP32 termine
-          // antes de abrir el mic. Usar max() para no clobber ventanas de silencio más largas.
-          if (nuevoEstado === "LISTENING") {
-            yaLogueadoEscuchandoRef.current = false;
-            const finMuteMinimo = Date.now() + 1500;
-            silencioHastaRef.current = Math.max(silencioHastaRef.current, finMuteMinimo);
           }
           agregarLog(`Estado: ${nuevoEstado}`, "info");
         } else if (linea.startsWith("LED:")) {
@@ -204,13 +175,10 @@ export function useWebSerial() {
           siguiente.ultimoResultado = linea.slice(7) as ResultadoTurno;
           if (siguiente.ultimoResultado === "CORRECT") {
             agregarLog("Correcto ✓", "correcto");
-            silencioHastaRef.current = Date.now() + 2500;
           } else if (siguiente.ultimoResultado === "WRONG") {
             agregarLog("Incorrecto ✗", "error");
-            silencioHastaRef.current = Date.now() + 4500;
           } else {
             agregarLog("Tiempo agotado ⏱", "error");
-            silencioHastaRef.current = Date.now() + 4500;
           }
         } else if (linea.startsWith("SEQUENCE:")) {
           siguiente.secuencia = linea.slice(9).split(",") as ColorJuego[];
@@ -228,8 +196,6 @@ export function useWebSerial() {
           siguiente.ultimaDeteccion = null;
           siguiente.ultimoTextoWhisper = null;
           agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
-          // TTS dice "Fin del juego. Obtuviste X puntos. Di empieza para volver a jugar." (~6s)
-          silencioHastaRef.current = Date.now() + 7000;
         } else if (!linea.startsWith("//")) {
           agregarLog(linea, "info");
         }
@@ -241,7 +207,6 @@ export function useWebSerial() {
   );
 
   // ---- Conectar ----
-
   const conectar = useCallback(async () => {
     if (!webSerialDisponible) {
       agregarLog("Web Serial API no disponible. Usa Chrome o Edge.", "error");
@@ -262,13 +227,7 @@ export function useWebSerial() {
       escritorRef.current = encoder.writable.getWriter();
 
       setEstadoJuego((prev) => ({ ...prev, conectado: true }));
-      agregarLog("Conectado al ESP32 por Web Serial", "sistema");
-      // Silenciar mic brevemente al conectar (no hay TTS de bienvenida en modo serial)
-      silencioHastaRef.current = Date.now() + 3000;
-
-      // Arrancar el bucle continuo de voz
-      bucleVozActivoRef.current = true;
-      bucleVoz();
+      agregarLog("Conectado al ESP32. Presiona ESPACIO o el botón para hablar.", "sistema");
 
       leyendoRef.current = true;
       const decoder = new TextDecoderStream();
@@ -289,12 +248,10 @@ export function useWebSerial() {
     } catch (e: any) {
       agregarLog(`Error: ${e.message}`, "error");
     }
-  }, [webSerialDisponible, whisper.modeloCargado, agregarLog, procesarLinea, bucleVoz]);
+  }, [webSerialDisponible, whisper.modeloCargado, agregarLog, procesarLinea]);
 
   // ---- Desconectar ----
-
   const desconectar = useCallback(async () => {
-    bucleVozActivoRef.current = false;
     leyendoRef.current = false;
     whisper.cancelarEscucha();
     try {
@@ -307,17 +264,16 @@ export function useWebSerial() {
     agregarLog("Desconectado del ESP32", "sistema");
   }, [agregarLog, whisper]);
 
-  // Badge solo visible en LISTENING — en otros estados escucha en segundo plano
-  const enListening = estadoJuego.estado === "LISTENING";
+  const puedoHablar = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado;
 
   const estadoConWhisper: EstadoCliente = {
     ...estadoJuego,
     whisperCargado:        whisper.modeloCargado,
-    whisperTranscribiendo: whisper.transcribiendo && enListening,
+    whisperTranscribiendo: whisper.transcribiendo,
   };
 
   return {
-    estadoJuego:              estadoConWhisper,
+    estadoJuego:             estadoConWhisper,
     conectar,
     desconectar,
     webSerialDisponible,
@@ -325,13 +281,14 @@ export function useWebSerial() {
       enviarComandoSerial("REINICIAR");
       setEstadoJuego((prev) => ({ ...prev, log: [] }));
     },
-    whisperProgresoDescarga:  whisper.progresoDescarga,
-    whisperNivelMic:          enListening ? whisper.nivelMic : 0,
-    whisperGrabando:          whisper.grabando && enListening,
-    whisperMicAbierto:        whisper.micAbierto && enListening,
-    whisperProcesando:        whisper.procesando && enListening,
-    whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
-    micAbiertoEnBackground:   whisper.micAbierto && !enListening &&
-                              (estadoJuego.estado === "IDLE" || estadoJuego.estado === "GAMEOVER"),
+    whisperProgresoDescarga: whisper.progresoDescarga,
+    whisperNivelMic:         puedoHablar ? whisper.nivelMic : 0,
+    whisperGrabando:         whisper.grabando,
+    whisperMicAbierto:       whisper.micAbierto,
+    whisperProcesando:       whisper.procesando,
+    whisperTiempoRestante:   whisper.tiempoRestante,
+    iniciarPTT:              iniciarPTTVoz,
+    finalizarPTT:            whisper.finalizarGrabacion,
+    puedoHablar,
   };
 }
