@@ -25,6 +25,7 @@ interface Props {
   puedoHablar?: boolean;           // PTT habilitado en el estado actual
   iniciarPTT?: () => void;         // iniciar grabación PTT
   finalizarPTT?: () => void;       // finalizar grabación PTT
+  whisperLocalActivo?: boolean;    // Whisper corre en Python local (no en browser)
   onReiniciar?: () => void;        // callback para reiniciar el juego
 }
 
@@ -47,6 +48,7 @@ export default function ConnectionPanel({
   puedoHablar = false,
   iniciarPTT,
   finalizarPTT,
+  whisperLocalActivo = false,
   onReiniciar,
 }: Props) {
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
@@ -165,10 +167,12 @@ export default function ConnectionPanel({
           ) : whisperCargado ? (
             <span className={cn(
               "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
-              dark ? "bg-emerald-500/15 text-emerald-400" : "bg-emerald-100 text-emerald-600"
+              whisperLocalActivo
+                ? dark ? "bg-blue-500/15 text-blue-300" : "bg-blue-100 text-blue-600"
+                : dark ? "bg-emerald-500/15 text-emerald-400" : "bg-emerald-100 text-emerald-600"
             )}>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              Whisper listo
+              <span className={cn("w-1.5 h-1.5 rounded-full", whisperLocalActivo ? "bg-blue-400" : "bg-emerald-400")} />
+              {whisperLocalActivo ? "Whisper local" : "Whisper listo"}
             </span>
           ) : (
             <span className={cn(

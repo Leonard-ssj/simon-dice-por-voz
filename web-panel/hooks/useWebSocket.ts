@@ -4,12 +4,22 @@
 // hooks/useWebSocket.ts — Modo Simulador PC
 //
 // Conecta al simulador Python via WebSocket.
-// Reconocimiento de voz: Push-to-Talk (PTT).
-//   Barra espaciadora (o botón en UI) → abre mic → usuario habla
-//   → suelta → Whisper WASM transcribe → comando enviado al juego.
 //
-// Sin bucle continuo, sin ventanas de silencio. El usuario
-// controla exactamente cuándo el micrófono está activo.
+// Reconocimiento de voz — modo DUAL con auto-detección:
+//
+//   PREFERIDO (Whisper local en Python):
+//     El servidor anuncia whisperDisponible:true en el mensaje READY.
+//     PTT → browser captura audio PCM Float32 16kHz con AudioContext
+//     → envía frame binario WebSocket → Python transcribe con Whisper
+//     → servidor devuelve {"tipo":"voz", "texto":"...", "comando":"..."}
+//     → browser actualiza UI.
+//
+//   FALLBACK (Whisper WASM en browser):
+//     Si el servidor no tiene Whisper (whisperDisponible:false),
+//     el browser usa useWhisperWASM igual que antes.
+//     Sigue siendo PTT (barra espaciadora / botón).
+//
+// Sin bucle continuo. El usuario controla el micrófono con PTT.
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -55,14 +65,41 @@ let contadorLog = 0;
 export function useWebSocket() {
   const [estadoJuego, setEstadoJuego] = useState<EstadoCliente>(ESTADO_INICIAL);
   const ws              = useRef<WebSocket | null>(null);
-  const escuchandoRef   = useRef(false);   // evita inicios simultáneos de PTT
+  const escuchandoRef   = useRef(false);
   const estadoRef       = useRef<EstadoJuego>("IDLE");
-  // Ref a la versión más reciente de iniciarPTTVoz (evita stale closure en useEffect)
   const iniciarPTTRef   = useRef<() => void>(() => {});
 
+  // ---- Modo Whisper local (Python) ----
+  const whisperDisponibleRef = useRef(false);
+  const [whisperLocalActivo, setWhisperLocalActivo] = useState(false);
+
+  // Estado de grabación raw para UI
+  const [rawGrabando,   setRawGrabando]   = useState(false);
+  const [rawProcesando, setRawProcesando] = useState(false);
+  const rawGrabandoRef   = useRef(false);
+  const rawProcesandoRef = useRef(false);
+
+  // Refs de AudioContext para grabar PCM sin Whisper WASM
+  const audioCtxRef     = useRef<AudioContext | null>(null);
+  const micRawRef       = useRef<MediaStream | null>(null);
+  const audioSamplesRef = useRef<Float32Array[]>([]);
+  const grabandoRawRef  = useRef(false);
+  const [rawNivelMic,   setRawNivelMic]   = useState(0);
+
+  // ---- Whisper WASM (fallback) ----
   const whisper = useWhisperWASM();
 
   // ---- Helpers ----
+
+  const setRawGrabandoAll = useCallback((v: boolean) => {
+    rawGrabandoRef.current = v;
+    setRawGrabando(v);
+  }, []);
+
+  const setRawProcesandoAll = useCallback((v: boolean) => {
+    rawProcesandoRef.current = v;
+    setRawProcesando(v);
+  }, []);
 
   const agregarLog = useCallback(
     (mensaje: string, tipo: "info" | "correcto" | "error" | "voz" | "sistema" = "info") => {
@@ -83,54 +120,161 @@ export function useWebSocket() {
     }
   }, []);
 
+  // ---- Grabación PCM raw (para Whisper local en Python) ----
+
+  const iniciarGrabacionRaw = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate:       16000,
+        channelCount:     1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    });
+    micRawRef.current      = stream;
+    audioSamplesRef.current = [];
+    grabandoRawRef.current  = true;
+
+    // AudioContext a 16kHz — mismo formato que espera Whisper
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    audioCtxRef.current = ctx;
+
+    const source    = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      if (!grabandoRawRef.current) return;
+      const data = e.inputBuffer.getChannelData(0);
+      audioSamplesRef.current.push(new Float32Array(data));
+
+      // Nivel de micrófono para la barra de UI
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+      setRawNivelMic(Math.min(Math.sqrt(sum / data.length) * 5, 1));
+    };
+
+    source.connect(processor);
+    processor.connect(ctx.destination);
+
+    // Guardar referencias para cleanup
+    (ctx as AudioContext & { _src: AudioNode; _proc: AudioNode })._src  = source;
+    (ctx as AudioContext & { _src: AudioNode; _proc: AudioNode })._proc = processor;
+  }, []);
+
+  const finalizarGrabacionRaw = useCallback(async (): Promise<ArrayBuffer | null> => {
+    grabandoRawRef.current = false;
+    setRawNivelMic(0);
+
+    const ctx = audioCtxRef.current;
+    if (ctx) {
+      const c = ctx as AudioContext & { _src: AudioNode; _proc: AudioNode };
+      c._src?.disconnect();
+      c._proc?.disconnect();
+      await ctx.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    micRawRef.current?.getTracks().forEach((t) => t.stop());
+    micRawRef.current = null;
+
+    const muestras = audioSamplesRef.current;
+    if (muestras.length === 0) return null;
+
+    const totalLen = muestras.reduce((a, b) => a + b.length, 0);
+    if (totalLen < 1600) return null; // < 0.1s — ignorar
+
+    const combined = new Float32Array(totalLen);
+    let offset = 0;
+    for (const buf of muestras) {
+      combined.set(buf, offset);
+      offset += buf.length;
+    }
+    return combined.buffer;
+  }, []);
+
   // ---- PTT: iniciar grabación ----
+
   const iniciarPTTVoz = useCallback(async () => {
-    if (escuchandoRef.current || !whisper.modeloCargado) return;
+    if (escuchandoRef.current) return;
     if (!ESTADOS_ESCUCHA.has(estadoRef.current)) return;
 
     escuchandoRef.current = true;
 
-    // Callback que pausa el timer del juego mientras Whisper infiere
-    const onProcesandoInicio = estadoRef.current === "LISTENING"
-      ? () => enviarComando("WHISPER_PROCESANDO")
-      : undefined;
-
-    try {
-      const textoRaw = await whisper.escuchar(onProcesandoInicio, "ptt");
-      const comando  = textoAComando(textoRaw);
-
-      if (textoRaw) {
-        agregarLog(`"${textoRaw}" → ${comando}`, "voz");
+    if (whisperDisponibleRef.current) {
+      // ── Modo Whisper local: grabar audio raw → enviar binario a Python ──
+      try {
+        setRawGrabandoAll(true);
+        await iniciarGrabacionRaw();
+        // escuchandoRef se libera cuando llega el mensaje "voz" de Python
+      } catch (err) {
+        agregarLog(`Error al abrir micrófono: ${err}`, "error");
+        setRawGrabandoAll(false);
+        escuchandoRef.current = false;
       }
-
-      setEstadoJuego((prev) => ({
-        ...prev,
-        ultimoTextoWhisper: textoRaw || prev.ultimoTextoWhisper,
-        ultimaDeteccion:    comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
-      }));
-
-      if (comando !== "DESCONOCIDO") {
-        enviarComando(comando);
+    } else {
+      // ── Modo WASM fallback ──
+      if (!whisper.modeloCargado) {
+        escuchandoRef.current = false;
+        return;
       }
-    } catch (err) {
-      agregarLog(`Error en reconocimiento de voz: ${err}`, "error");
-    } finally {
-      escuchandoRef.current = false;
+      const onProcesandoInicio = estadoRef.current === "LISTENING"
+        ? () => enviarComando("WHISPER_PROCESANDO")
+        : undefined;
+
+      try {
+        const textoRaw = await whisper.escuchar(onProcesandoInicio, "ptt");
+        const comando  = textoAComando(textoRaw);
+
+        if (textoRaw) agregarLog(`"${textoRaw}" → ${comando}`, "voz");
+
+        setEstadoJuego((prev) => ({
+          ...prev,
+          ultimoTextoWhisper: textoRaw || prev.ultimoTextoWhisper,
+          ultimaDeteccion:    comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
+        }));
+
+        if (comando !== "DESCONOCIDO") enviarComando(comando);
+      } catch (err) {
+        agregarLog(`Error en reconocimiento de voz: ${err}`, "error");
+      } finally {
+        escuchandoRef.current = false;
+      }
     }
-  }, [whisper, agregarLog, enviarComando]);
+  }, [whisper, agregarLog, enviarComando, iniciarGrabacionRaw, setRawGrabandoAll]);
 
-  // Mantener ref actualizada (para el useEffect de spacebar)
   useEffect(() => {
     iniciarPTTRef.current = iniciarPTTVoz;
   }, [iniciarPTTVoz]);
 
+  // ---- PTT: finalizar grabación ----
+
+  const finalizarPTTExterior = useCallback(async () => {
+    if (whisperDisponibleRef.current) {
+      // Modo local: detener grabación y enviar audio a Python
+      if (!rawGrabandoRef.current) return;
+      setRawGrabandoAll(false);
+      setRawProcesandoAll(true);
+
+      const buffer = await finalizarGrabacionRaw();
+      if (buffer && ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.send(buffer);
+        // escuchandoRef y rawProcesando se limpian al recibir mensaje "voz"
+      } else {
+        setRawProcesandoAll(false);
+        escuchandoRef.current = false;
+      }
+    } else {
+      // Modo WASM: señalar a useWhisperWASM que pare la grabación
+      whisper.finalizarGrabacion();
+    }
+  }, [whisper, finalizarGrabacionRaw, setRawGrabandoAll, setRawProcesandoAll]);
+
   // ---- Spacebar PTT — global ----
+
   useEffect(() => {
     if (!estadoJuego.conectado) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat) return;
-      // No interceptar espacio en inputs o botones
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON") return;
       e.preventDefault();
@@ -142,7 +286,7 @@ export function useWebSocket() {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code !== "Space") return;
       e.preventDefault();
-      whisper.finalizarGrabacion();
+      finalizarPTTExterior();
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -151,21 +295,31 @@ export function useWebSocket() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup",   handleKeyUp);
     };
-  }, [estadoJuego.conectado, whisper.finalizarGrabacion]); // eslint-disable-line
+  }, [estadoJuego.conectado, finalizarPTTExterior]); // eslint-disable-line
 
   // ---- Procesar mensajes del servidor ----
+
   const procesarMensaje = useCallback(
     (msg: MensajeWS) => {
       setEstadoJuego((prev) => {
         const siguiente = { ...prev };
 
         switch (msg.tipo) {
-          case "ready":
-            agregarLog("Simulador listo", "sistema");
+          case "ready": {
+            const disponible = (msg as MensajeWS & { whisperDisponible?: boolean }).whisperDisponible === true;
+            whisperDisponibleRef.current = disponible;
+            setWhisperLocalActivo(disponible);
+            agregarLog(
+              disponible
+                ? "Simulador listo — Whisper local activo"
+                : "Simulador listo — usando Whisper del navegador",
+              "sistema"
+            );
             break;
+          }
 
           case "state":
-            siguiente.estado = msg.estado as EstadoJuego;
+            siguiente.estado  = msg.estado as EstadoJuego;
             estadoRef.current = msg.estado as EstadoJuego;
             if (msg.estado === "IDLE" || msg.estado === "SHOWING") {
               siguiente.esperado = null;
@@ -174,7 +328,6 @@ export function useWebSocket() {
               siguiente.ledActivo = null;
             }
             if (msg.estado === "SHOWING") {
-              // Cancelar cualquier grabación activa mientras muestra LEDs
               whisper.cancelarEscucha();
               siguiente.ultimaDeteccion    = null;
               siguiente.ultimoTextoWhisper = null;
@@ -221,17 +374,25 @@ export function useWebSocket() {
             break;
 
           case "gameover":
-            siguiente.estado = "GAMEOVER";
+            siguiente.estado  = "GAMEOVER";
             estadoRef.current = "GAMEOVER";
-            siguiente.esperado = null;
-            siguiente.ultimaDeteccion = null;
+            siguiente.esperado           = null;
+            siguiente.ultimaDeteccion    = null;
             siguiente.ultimoTextoWhisper = null;
             agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
             break;
 
           case "voz":
+            // Resultado de Whisper local — Python transcribió y procesó
             siguiente.ultimoTextoWhisper = msg.texto;
+            siguiente.ultimaDeteccion    = msg.comando !== "DESCONOCIDO"
+              ? (msg.comando as ColorJuego)
+              : prev.ultimaDeteccion;
             agregarLog(`"${msg.texto}" → ${msg.comando}`, "voz");
+            // Liberar estado de grabación local
+            setRawProcesandoAll(false);
+            setRawGrabandoAll(false);
+            escuchandoRef.current = false;
             break;
 
           case "log":
@@ -242,13 +403,16 @@ export function useWebSocket() {
         return siguiente;
       });
     },
-    [agregarLog, whisper]
+    [agregarLog, whisper, setRawProcesandoAll, setRawGrabandoAll]
   );
 
   // ---- Conectar ----
+
   const conectar = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN ||
-        ws.current?.readyState === WebSocket.CONNECTING) return;
+    if (
+      ws.current?.readyState === WebSocket.OPEN ||
+      ws.current?.readyState === WebSocket.CONNECTING
+    ) return;
 
     agregarLog(`Conectando a ${WS_URL}...`, "sistema");
     const socket = new WebSocket(WS_URL);
@@ -273,15 +437,21 @@ export function useWebSocket() {
 
     socket.onclose = () => {
       whisper.cancelarEscucha();
+      setRawGrabandoAll(false);
+      setRawProcesandoAll(false);
+      escuchandoRef.current        = false;
+      whisperDisponibleRef.current = false;
+      setWhisperLocalActivo(false);
       setEstadoJuego((prev) => ({ ...prev, conectado: false }));
       agregarLog("Conexión cerrada", "sistema");
       ws.current = null;
     };
 
     ws.current = socket;
-  }, [agregarLog, procesarMensaje, whisper]);
+  }, [agregarLog, procesarMensaje, whisper, setRawGrabandoAll, setRawProcesandoAll]);
 
   // ---- Desconectar ----
+
   const desconectar = useCallback(() => {
     whisper.cancelarEscucha();
     ws.current?.close();
@@ -295,13 +465,22 @@ export function useWebSocket() {
     return () => { ws.current?.close(); };
   }, []);
 
-  // Mostrar estado de mic en todos los estados de escucha (no solo LISTENING)
+  // ---- Props compuestos para UI ----
+
   const puedoHablar = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado;
+
+  // Combinar estados de ambos modos para mostrar en UI de forma uniforme
+  const grabando      = rawGrabando   || whisper.grabando;
+  const procesando    = rawProcesando || whisper.procesando;
+  const micAbierto    = rawGrabando   || whisper.micAbierto;
+  const transcribiendo = grabando || procesando;
+  const nivelMic      = rawGrabando   ? rawNivelMic : (puedoHablar ? whisper.nivelMic : 0);
+  const modeloCargado = whisperLocalActivo || whisper.modeloCargado;
 
   const estadoConWhisper: EstadoCliente = {
     ...estadoJuego,
-    whisperCargado:        whisper.modeloCargado,
-    whisperTranscribiendo: whisper.transcribiendo,
+    whisperCargado:        modeloCargado,
+    whisperTranscribiendo: transcribiendo,
   };
 
   return {
@@ -313,16 +492,17 @@ export function useWebSocket() {
       enviarComando("REINICIAR");
       setEstadoJuego((prev) => ({ ...prev, log: [] }));
     },
-    // Props de Whisper — visibles en todos los estados de escucha
-    whisperProgresoDescarga: whisper.progresoDescarga,
-    whisperNivelMic:         puedoHablar ? whisper.nivelMic : 0,
-    whisperGrabando:         whisper.grabando,
-    whisperMicAbierto:       whisper.micAbierto,
-    whisperProcesando:       whisper.procesando,
-    whisperTiempoRestante:   whisper.tiempoRestante,
-    // PTT — funciones para el botón en UI
-    iniciarPTT:              iniciarPTTVoz,
-    finalizarPTT:            whisper.finalizarGrabacion,
+    // Props de voz — unificados independientemente del modo
+    whisperLocalActivo,
+    whisperProgresoDescarga: whisperLocalActivo ? null : whisper.progresoDescarga,
+    whisperNivelMic:         nivelMic,
+    whisperGrabando:         grabando,
+    whisperMicAbierto:       micAbierto,
+    whisperProcesando:       procesando,
+    whisperTiempoRestante:   whisperLocalActivo ? null : whisper.tiempoRestante,
+    // PTT
+    iniciarPTT:  iniciarPTTVoz,
+    finalizarPTT: finalizarPTTExterior,
     puedoHablar,
   };
 }

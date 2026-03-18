@@ -7,13 +7,17 @@
 #   - LEDs simulados en la terminal con colores ANSI
 #   - WebSocket activo → el Web Panel se conecta en modo Simulador
 #
-# Reconocimiento de voz:
-#   El browser (Chrome/Edge) graba el micrófono y usa Whisper WASM.
-#   Los comandos reconocidos llegan al simulador via WebSocket como JSON:
+# Reconocimiento de voz (preferido — Whisper local):
+#   El browser graba audio PTT y envía frames binarios Float32 PCM 16kHz.
+#   Python transcribe con Whisper local y devuelve el comando al panel.
+#
+# Reconocimiento de voz (fallback — Whisper WASM):
+#   Si Whisper no cargó, el browser usa Whisper WASM y manda texto:
 #   {"tipo": "comando", "comando": "ROJO"}
 #
 # Uso:
 #   cd tests/simulador_pc
+#   pip install -r requirements_test.txt
 #   python main.py
 #   → luego abre http://localhost:3000 en Chrome o Edge
 #   → conecta al modo "Simulador WebSocket"
@@ -192,16 +196,34 @@ def _on_cliente_conectado():
     decir("Di empieza para comenzar.", bloquear=False)
 
 
-def _on_comando_panel(cmd: str):
-    """Comando reconocido por Whisper WASM en el browser."""
-    # El browser avisa que Whisper empezó a procesar — pausar el timer del turno
-    if cmd == "WHISPER_PROCESANDO":
-        juego.pausar_timeout()
-        return
-    # Cualquier resultado de Whisper (color, DESCONOCIDO, etc.) reanuda el timer
+def _on_audio_recibido(audio_bytes: bytes):
+    """
+    Audio PCM Float32 16kHz enviado desde el browser en modo PTT.
+    Python transcribe con Whisper local, procesa el comando y notifica al panel.
+    """
+    juego.pausar_timeout()  # pausar timer mientras Whisper infiere (~1s)
+    texto, comando = ws.transcribir(audio_bytes)
     juego.reanudar_timeout()
-    log(f"[Panel] Comando: {cmd}", "voz")
-    ws.enviar_log(f"Comando recibido: {cmd}")
+
+    # Informar al panel del texto transcripto y el comando resultante
+    ws.enviar_voz(texto, comando)
+
+    if texto:
+        log(f'[Voz] "{texto}" → {comando}', "voz")
+    else:
+        log("[Voz] No se detectó habla.", "info")
+
+    if comando != "DESCONOCIDO":
+        juego.procesar_comando(comando)
+
+
+def _on_comando_panel(cmd: str):
+    """
+    Fallback: comando de texto enviado por el browser cuando usa Whisper WASM
+    (solo ocurre si Whisper local no está disponible en el servidor).
+    """
+    log(f"[Panel/WASM] Comando: {cmd}", "voz")
+    ws.enviar_log(f"Comando recibido (WASM): {cmd}")
     juego.procesar_comando(cmd)
 
 
@@ -218,6 +240,7 @@ def _registrar_callbacks():
     juego.on_resultado     = _on_resultado
     juego.on_log           = _on_log
 
+    ws.on_audio             = _on_audio_recibido
     ws.on_comando           = _on_comando_panel
     ws.on_cliente_conectado = _on_cliente_conectado
 
@@ -241,10 +264,15 @@ def main():
     print("")
     print("  2. Selecciona 'Simulador — WebSocket'")
     print("  3. Haz clic en 'Conectar'")
-    print("  4. Espera 'Whisper listo' y di EMPIEZA")
+    print("  4. Presiona ESPACIO y di EMPIEZA")
     print("=" * 55 + "\n")
 
     inicializar_tts()
+
+    # Cargar Whisper local antes de iniciar el servidor WebSocket.
+    # Con modelo cacheado (~74MB) tarda 2-3 segundos.
+    # Si falla, el browser usará Whisper WASM automáticamente.
+    ws.cargar_whisper()
 
     ws.iniciar()
     ws.enviar_ready()
