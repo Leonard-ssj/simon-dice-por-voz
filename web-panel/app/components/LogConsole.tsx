@@ -45,14 +45,16 @@ export default function LogConsole({ log, dark, onClear }: Props) {
 
   const logFiltrado = filtro === "todos" ? log : log.filter((e) => e.tipo === filtro);
 
-  // Newest at top — al llegar nuevo mensaje, volver al inicio (scrollTop=0)
+  // Newest at top — forzar scroll al inicio cuando llega mensaje nuevo.
+  // overflow-anchor:none en el contenedor evita que el browser reajuste
+  // automáticamente el scroll al insertar elementos arriba.
   useEffect(() => {
     if (autoScroll && listRef.current) {
       listRef.current.scrollTop = 0;
     }
   }, [log.length, autoScroll]);
 
-  // Detecta si el usuario bajó a ver historial (top = recientes, bottom = antiguos)
+  // Si el usuario bajó a revisar historial (top=recientes, bottom=antiguos)
   function handleScroll() {
     const el = listRef.current;
     if (!el) return;
@@ -149,11 +151,13 @@ export default function LogConsole({ log, dark, onClear }: Props) {
         })}
       </div>
 
-      {/* Lista */}
+      {/* Lista — overflow-anchor:none impide que el browser reajuste el scroll
+          al insertar nuevos elementos arriba (newest-at-top pattern) */}
       <div
         ref={listRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-2 font-mono text-[11px] space-y-px min-h-0"
+        style={{ overflowAnchor: "none" }}
       >
         {logFiltrado.length === 0 && (
           <p className={cn("italic p-2", dark ? "text-white/15" : "text-slate-300")}>
@@ -166,9 +170,9 @@ export default function LogConsole({ log, dark, onClear }: Props) {
             return (
               <motion.div
                 key={e.id}
-                initial={{ opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.1 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.15 }}
                 className={cn(
                   "flex items-start gap-2 px-2 py-[3px] rounded-lg transition-colors",
                   c.rowBg,
