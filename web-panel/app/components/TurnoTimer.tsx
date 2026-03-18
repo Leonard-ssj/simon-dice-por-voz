@@ -9,7 +9,8 @@ interface Props {
   estado: EstadoJuego;
   esperado: ColorJuego | null;
   dark: boolean;
-  timeoutMs?: number; // total de tiempo del turno en ms (default 30000)
+  timeoutMs?: number;  // total de tiempo del turno en ms (default 30000)
+  startDelayMs?: number; // esperar N ms antes de iniciar (para que la TTS termine)
 }
 
 const COLOR_DOT: Record<ColorJuego, string> = {
@@ -36,15 +37,28 @@ const TIPO_COLOR = {
   accion: "text-yellow-400/80",
 };
 
-export default function TurnoTimer({ estado, esperado, dark, timeoutMs = 30000 }: Props) {
-  const [segundos, setSegundos] = useState(timeoutMs / 1000);
+export default function TurnoTimer({ estado, esperado, dark, timeoutMs = 30000, startDelayMs = 3500 }: Props) {
+  const [segundos, setSegundos]   = useState(timeoutMs / 1000);
+  const [activo,   setActivo]     = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const totalSeg = timeoutMs / 1000;
+  const delayRef    = useRef<ReturnType<typeof setTimeout>  | null>(null);
+  const totalSeg    = timeoutMs / 1000;
 
-  // Iniciar/resetear contador cuando entra en LISTENING
   useEffect(() => {
-    if (estado === "LISTENING") {
+    // Limpiar siempre al salir de LISTENING o al desmontar
+    if (estado !== "LISTENING") {
+      if (delayRef.current)    clearTimeout(delayRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      setActivo(false);
       setSegundos(totalSeg);
+      return;
+    }
+
+    // Entró en LISTENING — esperar startDelayMs (TTS "Tu turno...") antes de arrancar
+    setActivo(false);
+    setSegundos(totalSeg);
+    delayRef.current = setTimeout(() => {
+      setActivo(true);
       intervalRef.current = setInterval(() => {
         setSegundos((s) => {
           if (s <= 0.2) {
@@ -54,14 +68,13 @@ export default function TurnoTimer({ estado, esperado, dark, timeoutMs = 30000 }
           return s - 0.2;
         });
       }, 200);
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      setSegundos(totalSeg);
-    }
+    }, startDelayMs);
+
     return () => {
+      if (delayRef.current)    clearTimeout(delayRef.current);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [estado, totalSeg]);
+  }, [estado, totalSeg, startDelayMs]);
 
   const pct  = (segundos / totalSeg) * 100;
   const sInt = Math.ceil(segundos);
@@ -77,7 +90,7 @@ export default function TurnoTimer({ estado, esperado, dark, timeoutMs = 30000 }
       )}>
         <div className="flex items-center justify-between">
           <p className={cn("text-[10px] font-semibold uppercase tracking-widest", dark ? "text-white/25" : "text-slate-400")}>
-            Tiempo restante
+            {activo ? "Tiempo restante" : "Preparando..."}
           </p>
           {esperado && (
             <div className="flex items-center gap-1.5">
@@ -93,19 +106,20 @@ export default function TurnoTimer({ estado, esperado, dark, timeoutMs = 30000 }
         {/* Número grande */}
         <AnimatePresence mode="wait">
           <motion.div
-            key={sInt}
+            key={activo ? sInt : "wait"}
             initial={{ opacity: 0.6, scale: 0.85 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.15 }}
             className={cn(
               "text-5xl font-bold tabular-nums text-center leading-none",
-              critico  ? "text-red-400"    :
-              urgente  ? "text-yellow-400" :
-                         (dark ? "text-white" : "text-slate-800")
+              !activo    ? (dark ? "text-white/20" : "text-slate-300") :
+              critico    ? "text-red-400"    :
+              urgente    ? "text-yellow-400" :
+                           (dark ? "text-white" : "text-slate-800")
             )}
           >
-            {sInt}
-            <span className={cn("text-base ml-1", dark ? "text-white/30" : "text-slate-400")}>s</span>
+            {activo ? sInt : "—"}
+            {activo && <span className={cn("text-base ml-1", dark ? "text-white/30" : "text-slate-400")}>s</span>}
           </motion.div>
         </AnimatePresence>
 
@@ -114,18 +128,24 @@ export default function TurnoTimer({ estado, esperado, dark, timeoutMs = 30000 }
           <motion.div
             className={cn(
               "h-full rounded-full transition-colors duration-500",
-              critico  ? "bg-red-500"     :
-              urgente  ? "bg-yellow-400"  :
+              !activo  ? (dark ? "bg-white/10" : "bg-slate-300") :
+              critico  ? "bg-red-500"    :
+              urgente  ? "bg-yellow-400" :
                          "bg-emerald-400"
             )}
-            style={{ width: `${pct}%` }}
+            style={{ width: activo ? `${pct}%` : "100%" }}
             transition={{ duration: 0.2, ease: "linear" }}
           />
         </div>
 
-        {critico && (
+        {activo && critico && (
           <p className="text-center text-xs text-red-400 animate-pulse font-semibold">
             ¡Habla ahora!
+          </p>
+        )}
+        {!activo && (
+          <p className={cn("text-center text-xs", dark ? "text-white/25" : "text-slate-400")}>
+            Escucha las instrucciones...
           </p>
         )}
       </div>

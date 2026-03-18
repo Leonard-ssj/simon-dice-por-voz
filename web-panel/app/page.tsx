@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mic2, Sun, Moon, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,7 @@ import LogConsole from "./components/LogConsole";
 import ScoreBoard from "./components/ScoreBoard";
 import HowToPlay from "./components/HowToPlay";
 import TurnoTimer from "./components/TurnoTimer";
+import SesionStats from "./components/SesionStats";
 import ParticleBackground from "./components/ParticleBackground";
 import type { ColorJuego } from "../types/game";
 
@@ -46,6 +47,35 @@ export default function Home() {
 
   const handleConectar    = useCallback(() => activo.conectar(),    [activo]);
   const handleDesconectar = useCallback(() => activo.desconectar(), [activo]);
+
+  // ── Estadísticas de sesión ──
+  const [mejorNivel,      setMejorNivel]      = useState(0);
+  const [mejorPuntuacion, setMejorPuntuacion] = useState(0);
+  const [totalPartidas,   setTotalPartidas]   = useState(0);
+  const [rachaActual,     setRachaActual]      = useState(0);
+  const [rachaMaxima,     setRachaMaxima]      = useState(0);
+
+  // Actualizar stats cuando cambia el estado del juego
+  const prevEstado = useRef<string>("");
+  useEffect(() => {
+    const e = estadoJuego.estado;
+    if (e === prevEstado.current) return;
+    prevEstado.current = e;
+
+    if (e === "CORRECT") {
+      const nueva = rachaActual + 1;
+      setRachaActual(nueva);
+      setRachaMaxima((m) => Math.max(m, nueva));
+    }
+    if (e === "WRONG" || e === "GAMEOVER") {
+      setRachaActual(0);
+    }
+    if (e === "GAMEOVER") {
+      setTotalPartidas((n) => n + 1);
+      setMejorNivel((m) => Math.max(m, estadoJuego.nivel));
+      setMejorPuntuacion((m) => Math.max(m, estadoJuego.puntuacion));
+    }
+  }, [estadoJuego.estado, estadoJuego.nivel, estadoJuego.puntuacion, rachaActual]);
 
   const ledActivo: ColorJuego | null = estadoJuego.ledActivo;
 
@@ -200,6 +230,16 @@ export default function Home() {
               esperado={estadoJuego.esperado}
               dark={dark}
               timeoutMs={30000}
+              startDelayMs={3500}
+            />
+
+            {/* Estadísticas de sesión */}
+            <SesionStats
+              mejorNivel={mejorNivel}
+              mejorPuntuacion={mejorPuntuacion}
+              totalPartidas={totalPartidas}
+              rachaMaxima={rachaMaxima}
+              dark={dark}
             />
           </div>
 

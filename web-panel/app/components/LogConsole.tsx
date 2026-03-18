@@ -45,18 +45,18 @@ export default function LogConsole({ log, dark, onClear }: Props) {
 
   const logFiltrado = filtro === "todos" ? log : log.filter((e) => e.tipo === filtro);
 
-  // Auto-scroll inmediato al último mensaje
+  // Newest at top — al llegar nuevo mensaje, volver al inicio (scrollTop=0)
   useEffect(() => {
     if (autoScroll && listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight;
+      listRef.current.scrollTop = 0;
     }
   }, [log.length, autoScroll]);
 
+  // Detecta si el usuario bajó a ver historial (top = recientes, bottom = antiguos)
   function handleScroll() {
     const el = listRef.current;
     if (!el) return;
-    const distanciaAlFondo = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setAutoScroll(distanciaAlFondo < 40);
+    setAutoScroll(el.scrollTop < 40);
   }
 
   function copiarLog() {
@@ -200,7 +200,7 @@ export default function LogConsole({ log, dark, onClear }: Props) {
             exit={{ opacity: 0, y: 4 }}
             onClick={() => {
               setAutoScroll(true);
-              if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+              if (listRef.current) listRef.current.scrollTop = 0;
             }}
             className={cn(
               "flex items-center justify-center gap-1.5 w-full py-1.5 text-xs border-t transition-colors shrink-0",
@@ -209,7 +209,7 @@ export default function LogConsole({ log, dark, onClear }: Props) {
                 : "border-slate-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
             )}
           >
-            <ChevronDown size={11} /> Ir al final
+            <ChevronDown size={11} className="rotate-180" /> Ver recientes
           </motion.button>
         )}
       </AnimatePresence>
