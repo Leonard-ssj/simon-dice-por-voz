@@ -144,7 +144,6 @@ def _on_nivel(n: int):
     log(f"[Nivel] {n}", "sistema")
     ws.enviar_nivel(n)
     def _narrar_nivel():
-        decir("Correcto.", bloquear=False)
         if n > 1:
             decir(f"Nivel {n}.", bloquear=False)
     threading.Thread(target=_narrar_nivel, daemon=True).start()
@@ -164,7 +163,10 @@ def _on_resultado(r: str):
     log(f"[Resultado] {etiqueta}", tipo)
     ws.enviar_resultado(r)
 
-    if r == "WRONG":
+    if r == "CORRECT":
+        decir("Correcto.", bloquear=False)
+
+    elif r == "WRONG":
         def _narrar_wrong():
             time.sleep(0.2)
             decir("Incorrecto.", bloquear=False)
@@ -194,7 +196,7 @@ def _on_cliente_conectado():
     decir("Bienvenido a Simon Dice por Voz.", bloquear=False)
     decir("El sistema mostrara una secuencia de colores.", bloquear=False)
     decir("Cuando sea tu turno, di el color en voz alta.", bloquear=False)
-    decir("Di empieza para comenzar.", bloquear=False)
+    decir("Para comenzar, presiona el boton del microfono o la barra espaciadora y di empieza.", bloquear=False)
 
 
 def _on_ptt_inicio():

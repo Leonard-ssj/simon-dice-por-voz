@@ -44,6 +44,26 @@ Browser                          Python ws_server.py
   │        "comando":"VERDE"} ─
 ```
 
+### Narrador TTS (simulador)
+
+El simulador narra los eventos del juego en español. Sistema en cascada:
+
+| Prioridad | Motor | Voz | Calidad | Requiere |
+|---|---|---|---|---|
+| 1 (preferido) | `edge-tts` + `pygame` | `es-MX-DaliaNeural` | Neural, acento mexicano real | Internet |
+| 2 (fallback) | PowerShell SAPI | Sabina / Helena u otra instalada | Síntesis clásica | Voces Windows instaladas |
+
+Eventos narrados:
+- Conexión: bienvenida + instrucciones completas (incluyendo "presiona el botón y di empieza")
+- SHOWING_SEQUENCE: "Mira y escucha."
+- Cada color al mostrarse: "rojo", "verde", etc.
+- LISTENING: "Tu turno. Presiona el botón para hablar."
+- CORRECT: "Correcto."
+- Level up: "Nivel N."
+- WRONG: "Incorrecto. Di empieza para intentar de nuevo."
+- TIMEOUT: "Tiempo agotado. Di empieza para intentar de nuevo."
+- GAME_OVER: "Fin del juego. Obtuviste N puntos. Di empieza para volver a jugar."
+
 ### Diagrama de componentes
 
 ```
@@ -66,7 +86,9 @@ Web Panel (Chrome/Edge)
 ## Modo ESP32 — Producción
 
 El modo definitivo para la entrega del proyecto.
-Solo requiere: kit ESP32 + cable USB + Chrome o Edge. No instalar Python ni nada.
+Solo requiere: kit ESP32 + cable USB + Chrome o Edge. **No instalar Python ni nada.**
+
+### Cómo funciona paso a paso
 
 ```
 Kit ESP32-S3
@@ -78,14 +100,49 @@ Chrome / Edge — panel en Vercel o localhost:3000
   └── validador.ts     texto → comando → escribe "ROJO\n" por Serial
 ```
 
-Flujo completo:
-1. Panel descarga Whisper Small (~125 MB, se cachea en IndexedDB después)
-2. Usuario conecta ESP32 por USB → click "Conectar al ESP32"
-3. ESP32 envía `READY`, `STATE:IDLE`
-4. Usuario presiona ESPACIO o botón → habla → Whisper → "VERDE" → Serial → ESP32
-5. ESP32 muestra secuencia (LEDs + tonos), envía `STATE:SHOWING`, `LED:ROJO`, etc.
-6. ESP32 envía `STATE:LISTENING` → badge "Presiona para hablar"
-7. Browser detecta el color → Serial → ESP32 → evalúa → `RESULT:CORRECT/WRONG`
+### Flujo completo con ESP32
+
+1. **Abrir el panel** en `http://localhost:3000` o `https://[tu-app].vercel.app` en Chrome o Edge
+2. **Seleccionar "ESP32 — Web Serial"** en el toggle del panel
+3. **Whisper se carga** automáticamente en el browser (modelo `small` cuantizado, ~125 MB)
+   - Primera vez: se descarga desde HuggingFace y se guarda en IndexedDB del browser
+   - Siguientes veces: carga instantánea desde caché local
+4. **Conectar el ESP32** por USB y hacer click en "Conectar"
+   - Chrome/Edge pide seleccionar el puerto serial — elegir el del ESP32 (ej: COM5)
+   - El firmware responde con `READY` y `STATE:IDLE`
+5. **Presionar ESPACIO o el botón 🎤**, decir "**empieza**"
+   - Browser captura audio con Web Audio API (PTT mientras se mantiene presionado)
+   - Whisper transcribe: "empieza" → validador → comando `START`
+   - Browser escribe `START\n` por Serial al ESP32
+   - ESP32 recibe `START`, cambia a `STATE:SHOWING`
+6. **ESP32 muestra la secuencia** de colores (LEDs + tonos)
+   - Envía `STATE:SHOWING`, `LED:ROJO`, `LED:OFF`, `LED:VERDE`, etc.
+   - El panel refleja los LEDs en tiempo real
+   - Al terminar: `STATE:LISTENING` + `EXPECTED:ROJO`
+7. **Turno del jugador**: badge "Presiona para hablar" aparece en el panel
+   - Usuario presiona ESPACIO/botón → browser graba → Whisper → "rojo"
+   - validador.ts → `ROJO`
+   - Browser escribe `ROJO\n` por Serial
+   - ESP32 evalúa: envía `RESULT:CORRECT` o `RESULT:WRONG`
+8. **Si correcto**: secuencia crece en 1, ESP32 envía `LEVEL:2`, `STATE:SHOWING` de nuevo
+9. **Si incorrecto o timeout**: ESP32 envía `STATE:GAMEOVER` → decir "empieza" para reiniciar
+
+### Diagrama de comunicación ESP32
+
+```
+Usuario presiona PTT          Browser                    ESP32
+        │                        │                          │
+        ├─ mantiene botón ──────►│ getUserMedia() → graba   │
+        │                        │ ← suelta botón           │
+        │                        │ Whisper: "rojo" → ROJO   │
+        │                        ├──── "ROJO\n" ──────────►│
+        │                        │                          │ evalúa
+        │                        │◄─── "RESULT:CORRECT\n" ─┤
+        │                        │◄─── "LEVEL:2\n" ────────┤
+        │                        │◄─── "STATE:SHOWING\n" ──┤
+        │                        │◄─── "LED:AZUL\n" ───────┤
+        │                        │◄─── "LED:OFF\n" ────────┤
+```
 
 ---
 
@@ -134,19 +191,6 @@ sistemas-inteligentes/
     ├── setup.md
     └── flujo_conversacion.md
 ```
-
----
-
-## TTS — Narrador de voz
-
-El simulador usa un sistema de TTS en cascada para narrar eventos del juego:
-
-| Prioridad | Motor | Voz | Calidad | Requiere |
-|---|---|---|---|---|
-| 1 (preferido) | `edge-tts` + `pygame` | `es-MX-DaliaNeural` | Neural, acento mexicano real | Internet |
-| 2 (fallback) | PowerShell SAPI | Sabina / Helena u otra instalada | Síntesis clásica | Voces Windows instaladas |
-
-El fallback se activa automáticamente si edge-tts no está instalado o falla (ej: sin internet).
 
 ---
 
@@ -284,3 +328,12 @@ multilingüe. En este proyecto puede correr de dos formas:
 | Permisos mic browser | No necesita | Sí |
 | Latencia | 2–8 s | 1–3 s |
 | Disponible en | Solo simulador PC | Simulador (fallback) + ESP32 |
+
+---
+
+## Modos del panel (resumen)
+
+| Modo | Toggle | Cuándo usar |
+|---|---|---|
+| **Simulador — WebSocket** | "WebSocket" | `python main.py` corriendo en PC |
+| **ESP32 — Web Serial** | "Serial" | Kit ESP32 conectado por USB, producción |

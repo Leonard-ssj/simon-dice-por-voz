@@ -118,26 +118,29 @@ export default function ConnectionPanel({
               onTouchStart={(e) => { e.preventDefault(); iniciarPTT(); }}
               onTouchEnd={finalizarPTT}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold select-none transition-colors",
-                whisperTranscribiendo
-                  ? whisperGrabando
-                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                    : whisperProcesando
-                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/30"
-                      : "bg-blue-500/15 text-blue-300 border border-blue-500/20"
-                  : dark
-                    ? "bg-white/8 text-white/60 hover:bg-indigo-500/20 hover:text-indigo-300 border border-white/10"
-                    : "bg-slate-100 text-slate-500 hover:bg-indigo-100 hover:text-indigo-600 border border-slate-200"
+                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold select-none transition-all duration-150",
+                whisperGrabando
+                  ? "bg-emerald-500/30 text-emerald-200 border border-emerald-400/50 shadow-lg shadow-emerald-500/20 scale-95"
+                  : whisperProcesando
+                    ? "bg-purple-500/25 text-purple-200 border border-purple-400/40 shadow-md shadow-purple-500/15"
+                    : whisperTranscribiendo
+                      ? "bg-blue-500/20 text-blue-200 border border-blue-400/30"
+                      : dark
+                        ? "bg-indigo-600/25 text-indigo-200 border border-indigo-500/40 hover:bg-indigo-500/35 hover:shadow-lg hover:shadow-indigo-500/20 active:scale-95"
+                        : "bg-indigo-600 text-white border border-indigo-500 hover:bg-indigo-700 active:scale-95 shadow-md shadow-indigo-500/20"
               )}
             >
-              <Mic size={12} className={whisperGrabando ? "text-emerald-400" : ""} />
+              <Mic size={14} className={cn(
+                "transition-transform",
+                whisperGrabando ? "text-emerald-300 scale-110" : ""
+              )} />
               {whisperTranscribiendo
                 ? whisperGrabando
-                  ? "Grabando..."
+                  ? "🔴 Grabando..."
                   : whisperProcesando
-                    ? "Procesando..."
+                    ? "⚙ Procesando..."
                     : "Abriendo mic..."
-                : "Mantén para hablar"}
+                : "🎤 Mantén para hablar"}
             </button>
           ) : null}
 

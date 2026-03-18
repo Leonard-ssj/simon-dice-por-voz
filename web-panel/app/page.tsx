@@ -164,26 +164,43 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* ── Fila principal: LEDs | Estado + Score ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 shrink-0">
-          {/* LEDs (3/5) */}
-          <div className={cn(
-            "lg:col-span-3 rounded-2xl border p-5 flex flex-col items-center justify-center gap-3",
-            dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
-          )}>
-            <p className={cn(
-              "text-xs font-semibold uppercase tracking-widest self-start",
-              dark ? "text-white/25" : "text-slate-400"
+        {/* ── Área principal: 3 columnas, flex-1 ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 flex-1 min-h-0">
+
+          {/* Columna izquierda: LEDs + Secuencia (2/5) */}
+          <div className="lg:col-span-2 flex flex-col gap-3 min-h-0">
+            <div className={cn(
+              "rounded-2xl border p-5 flex flex-col items-center justify-center gap-3 shrink-0",
+              dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
             )}>
-              Panel de LEDs
-            </p>
-            <LEDPanel activo={ledActivo} secuencia={estadoJuego.secuencia} dark={dark} />
+              <p className={cn(
+                "text-xs font-semibold uppercase tracking-widest self-start",
+                dark ? "text-white/25" : "text-slate-400"
+              )}>
+                Panel de LEDs
+              </p>
+              <LEDPanel activo={ledActivo} secuencia={estadoJuego.secuencia} dark={dark} />
+            </div>
+
+            {/* Secuencia — compacta */}
+            <div className={cn(
+              "rounded-2xl border p-3 flex flex-col min-h-0 shrink-0",
+              dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
+            )}>
+              <p className={cn(
+                "text-[10px] font-semibold uppercase tracking-widest mb-1.5",
+                dark ? "text-white/25" : "text-slate-400"
+              )}>
+                Secuencia{estadoJuego.secuencia.length > 0 && ` · ${estadoJuego.secuencia.length} pasos`}
+              </p>
+              <SequenceDisplay secuencia={estadoJuego.secuencia} esperado={estadoJuego.esperado} />
+            </div>
           </div>
 
-          {/* Estado + Score (2/5) */}
-          <div className="lg:col-span-2 flex flex-col gap-3">
+          {/* Columna centro: Estado + Score (1/5) */}
+          <div className="lg:col-span-1 flex flex-col gap-3 min-h-0">
             <div className={cn(
-              "rounded-2xl border p-4 flex flex-col gap-2",
+              "rounded-2xl border p-4 flex flex-col gap-2 shrink-0",
               dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
             )}>
               <p className={cn(
@@ -201,28 +218,12 @@ export default function Home() {
             </div>
             <ScoreBoard nivel={estadoJuego.nivel} puntuacion={estadoJuego.puntuacion} dark={dark} />
           </div>
-        </div>
 
-        {/* ── Fila inferior: Secuencia | Log — flex-1 toma el espacio restante ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 flex-1 min-h-0">
-          {/* Secuencia */}
-          <div className={cn(
-            "rounded-2xl border p-4 flex flex-col min-h-0",
-            dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
-          )}>
-            <p className={cn(
-              "text-xs font-semibold uppercase tracking-widest mb-2 shrink-0",
-              dark ? "text-white/25" : "text-slate-400"
-            )}>
-              Secuencia {estadoJuego.secuencia.length > 0 && `· ${estadoJuego.secuencia.length} pasos`}
-            </p>
-            <div className="flex-1 overflow-y-auto min-h-0">
-              <SequenceDisplay secuencia={estadoJuego.secuencia} esperado={estadoJuego.esperado} />
-            </div>
+          {/* Columna derecha: Log — ocupa todo el alto (2/5) */}
+          <div className="lg:col-span-2 min-h-0 flex flex-col">
+            <LogConsole log={estadoJuego.log} dark={dark} onClear={limpiarLog} />
           </div>
 
-          {/* Log — llena todo el espacio disponible */}
-          <LogConsole log={estadoJuego.log} dark={dark} onClear={limpiarLog} />
         </div>
 
       </div>

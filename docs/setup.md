@@ -70,12 +70,14 @@ Verás en la terminal:
 1. Abre **Chrome o Edge** en `http://localhost:3000`
 2. Selecciona **"Simulador — WebSocket"** (ya está seleccionado por defecto)
 3. Click **"Conectar"**
-4. El panel mostrará en la barra inferior: micrófono, bocina y modelo Whisper activos
-5. Di **"empieza"** presionando `ESPACIO` o el botón 🎤
-6. Repite los colores: **"rojo"**, **"verde"**, **"azul"**, **"amarillo"**
+4. El panel mostrará en la barra: micrófono, bocina y modelo Whisper activos
+5. El narrador dirá: *"Presiona el botón del micrófono o la barra espaciadora y di empieza para comenzar"*
+6. Presiona `ESPACIO` o el botón 🎤 y di **"empieza"**
+7. Repite los colores: **"rojo"**, **"verde"**, **"azul"**, **"amarillo"**
 
 > **PTT — Push to Talk:** mantén presionado `ESPACIO` o el botón 🎤 mientras hablas.
 > Suéltalo cuando termines. Python graba el audio y Whisper lo transcribe.
+> El narrador dirá **"Correcto"** cuando aciertes y el nivel cuando subas.
 
 ### Detección automática de Whisper
 
@@ -148,7 +150,7 @@ npx vercel
 3. Selecciona **"ESP32 — Web Serial"**
 4. Click **"Conectar"** → selecciona el puerto serial del ESP32
 5. Espera el badge **"Whisper listo"** (~125 MB primera descarga, luego desde caché)
-6. Di **"empieza"** presionando `ESPACIO` o el botón 🎤 → juega
+6. Presiona `ESPACIO` o el botón 🎤, di **"empieza"** → juega
 
 > **Requisito:** Web Serial API solo funciona en Chrome y Edge.
 > Firefox, Safari y otros browsers no son compatibles.
@@ -180,3 +182,4 @@ completamente en el browser del usuario (client-side). No hay backend en Vercel.
 | "Cargando modelo..." no termina (WASM) | Conexión a internet lenta | Esperar (solo la primera vez, ~125 MB) |
 | El ESP32 no aparece en la lista de puertos | Driver no instalado o cable solo carga | Usar cable de datos, instalar driver CP210x o CH340 |
 | PTT no funciona (botón no responde) | Simulador no envió READY | Reconectar; verificar que el simulador Python esté corriendo |
+| El narrador no dice "Correcto" | Versión antigua del simulador | Actualizar con `git pull` y reiniciar `python main.py` |

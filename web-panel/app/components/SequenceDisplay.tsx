@@ -26,15 +26,15 @@ const ESPERADO_RING: Record<ColorJuego, string> = {
 export default function SequenceDisplay({ secuencia, esperado }: Props) {
   if (secuencia.length === 0) {
     return (
-      <div className="flex items-center justify-center h-16 text-white/20 text-sm">
-        La secuencia aparecerá aquí cuando empiece el juego
+      <div className="flex items-center justify-center h-10 text-white/20 text-xs">
+        La secuencia aparecerá aquí al iniciar
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-2">
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <AnimatePresence>
           {secuencia.map((color, i) => {
             const s = COLOR_STYLES[color];
@@ -45,8 +45,8 @@ export default function SequenceDisplay({ secuencia, esperado }: Props) {
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: i * 0.03, type: "spring", stiffness: 300 }}
                 className={cn(
-                  "w-9 h-9 rounded-lg border flex items-center justify-center",
-                  "text-[10px] font-bold",
+                  "w-6 h-6 rounded-md border flex items-center justify-center",
+                  "text-[9px] font-bold",
                   s.bg, s.border, s.text
                 )}
               >
