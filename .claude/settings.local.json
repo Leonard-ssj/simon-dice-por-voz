@@ -9,7 +9,10 @@
       "Bash(timeout 30 python main.py)",
       "Bash(python main.py)",
       "Bash(python -c \"import websockets; print\\(''websockets version:'', websockets.__version__\\); import websockets.server; print\\(''websockets.server OK''\\)\")",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "mcp__Desktop_Commander__start_search",
+      "mcp__Desktop_Commander__start_process",
+      "mcp__Desktop_Commander__read_process_output"
     ]
   }
 }

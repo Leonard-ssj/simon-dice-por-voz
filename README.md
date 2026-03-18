@@ -47,34 +47,47 @@ sistemas-inteligentes/
 
 ## Inicio rápido
 
-### 1. Modo Simulador (sin ESP32)
+### 1. Instalar dependencias (solo la primera vez)
 
 ```bash
-# Terminal 1 — Simulador Python
-cd tests/simulador_pc
-pip install -r requirements_test.txt
-python main.py
+# Dependencias Python (simulador + Whisper local + narrador TTS)
+pip install -r tests/simulador_pc/requirements_test.txt
+
+# Dependencias web
+cd web-panel && npm install && cd ..
+```
+
+> **Whisper local** (`openai-whisper small`, ~244 MB) se descarga automáticamente
+> en el primer `python run.py test`. Requiere `ffmpeg` instalado.
+> Si no hay Whisper local disponible, el panel usa Whisper WASM (~125 MB en IndexedDB).
+
+### 2. Arrancar — Modo Simulador (sin ESP32)
+
+```bash
+# Terminal 1 — Simulador Python (juego + Whisper local + TTS narrador)
+python run.py test
+# — ó directamente:
+python tests/simulador_pc/main.py
 
 # Terminal 2 — Panel web
 cd web-panel
-npm install
 npm run dev
 ```
 
 Abre **Chrome o Edge** en `http://localhost:3000`.
-Haz clic en **"Conectar al Simulador"**.
-Espera a que el modelo Whisper descargue (~125 MB, solo la primera vez).
-Di **"empieza"** para comenzar.
+Selecciona **"Simulador — WebSocket"** y haz clic en **Conectar**.
+Presiona **ESPACIO** (o el botón del panel) y di **"empieza"**.
 
-### 2. Modo ESP32 (producción)
+### 3. Arrancar — Modo ESP32 (producción)
 
 ```bash
+# Solo el panel — la conexión va por USB Serial directo desde el browser
 cd web-panel
 npm run dev
 ```
 
 Abre `http://localhost:3000` en Chrome o Edge.
-Haz clic en **"Conectar al ESP32"** y selecciona el puerto USB.
+Selecciona **"ESP32 — Web Serial"**, conecta el ESP32 por USB y haz clic en **Conectar**.
 
 ---
 
