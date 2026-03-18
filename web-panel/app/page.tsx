@@ -32,9 +32,10 @@ export default function Home() {
   const whisperNivelMic       = activo.whisperNivelMic ?? 0;
   const whisperGrabando       = activo.whisperGrabando ?? false;
   const whisperMicAbierto     = activo.whisperMicAbierto ?? false;
-  const whisperProcesando     = activo.whisperProcesando ?? false;
-  const whisperTiempoRestante = activo.whisperTiempoRestante ?? null;
-  const handleReiniciar       = activo.reiniciar ?? undefined;
+  const whisperProcesando       = activo.whisperProcesando ?? false;
+  const whisperTiempoRestante   = activo.whisperTiempoRestante ?? null;
+  const micAbiertoEnBackground  = activo.micAbiertoEnBackground ?? false;
+  const handleReiniciar         = activo.reiniciar ?? undefined;
 
   const handleConectar    = useCallback(() => activo.conectar(),    [activo]);
   const handleDesconectar = useCallback(() => activo.desconectar(), [activo]);
@@ -123,6 +124,7 @@ export default function Home() {
             whisperMicAbierto={whisperMicAbierto}
             whisperProcesando={whisperProcesando}
             enEscucha={estadoJuego.estado === "LISTENING"}
+            micAbiertoEnBackground={micAbiertoEnBackground}
             onReiniciar={handleReiniciar}
             whisperTiempoRestante={whisperTiempoRestante}
           />

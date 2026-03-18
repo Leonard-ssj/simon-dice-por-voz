@@ -152,12 +152,13 @@ export function useWebSerial() {
         // Retorno rápido (< 300ms): modelo no listo o ya escuchando → espera corta
         // Sesión real completada: espera 1.5s para que el ESP32 procese el comando
         // antes de volver a escuchar. Evita disparos en cadena de alucinaciones.
-        await dormir(elapsed < 300 ? 400 : 1500);
+        const enEscuchaActiva = estadoRef.current === "LISTENING";
+        await dormir(elapsed < 300 ? 400 : enEscuchaActiva ? 1500 : 500);
       } else {
         await dormir(200);
       }
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // sin deps: usa solo refs
 
   // ---- Procesar líneas de texto del ESP32 ----
 
@@ -330,5 +331,7 @@ export function useWebSerial() {
     whisperMicAbierto:        whisper.micAbierto && enListening,
     whisperProcesando:        whisper.procesando && enListening,
     whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
+    micAbiertoEnBackground:   whisper.micAbierto && !enListening &&
+                              (estadoJuego.estado === "IDLE" || estadoJuego.estado === "GAMEOVER"),
   };
 }

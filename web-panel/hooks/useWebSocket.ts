@@ -158,7 +158,9 @@ export function useWebSocket() {
         // En LISTENING: espera 1.5s para que el juego procese antes de volver a escuchar.
         // En otros estados (IDLE, GAMEOVER): espera más para no saturar con alucinaciones.
         const enEscuchaActiva = estadoRef.current === "LISTENING";
-        await dormir(elapsed < 300 ? 400 : enEscuchaActiva ? 1500 : 3000);
+        // En LISTENING: 1.5s para que el juego procese antes de volver a escuchar.
+        // En IDLE/GAMEOVER: 500ms — casi continuo para no perder el "empieza".
+        await dormir(elapsed < 300 ? 400 : enEscuchaActiva ? 1500 : 500);
       } else {
         await dormir(200);
       }
@@ -353,5 +355,8 @@ export function useWebSocket() {
     whisperMicAbierto:        whisper.micAbierto && enListening,
     whisperProcesando:        whisper.procesando && enListening,
     whisperTiempoRestante:    enListening ? whisper.tiempoRestante : null,
+    // Mic abierto en background (IDLE/GAMEOVER) — para mostrar badge "Di empieza"
+    micAbiertoEnBackground:   whisper.micAbierto && !enListening &&
+                              (estadoJuego.estado === "IDLE" || estadoJuego.estado === "GAMEOVER"),
   };
 }

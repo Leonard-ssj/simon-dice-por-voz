@@ -22,6 +22,7 @@ interface Props {
   whisperTiempoRestante?: number | null; // countdown en segundos
   whisperProcesando?: boolean;     // Whisper procesando audio (inferencia)
   enEscucha?: boolean;             // estado LISTENING activo (juego pide voz)
+  micAbiertoEnBackground?: boolean; // mic abierto en IDLE/GAMEOVER (esperando "empieza")
   onReiniciar?: () => void;        // callback para reiniciar el juego
 }
 
@@ -42,6 +43,7 @@ export default function ConnectionPanel({
   whisperTiempoRestante = null,
   whisperProcesando = false,
   enEscucha = false,
+  micAbiertoEnBackground = false,
   onReiniciar,
 }: Props) {
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
@@ -96,6 +98,17 @@ export default function ConnectionPanel({
       {/* Badge + barra de nivel de Whisper */}
       {mostrarWhisper && (
         <div className="flex items-center gap-2">
+          {/* Badge background — mic abierto en IDLE/GAMEOVER esperando "empieza" */}
+          {micAbiertoEnBackground && !enEscucha && !whisperTranscribiendo ? (
+            <span className={cn(
+              "flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full",
+              dark ? "bg-white/5 text-white/35" : "bg-slate-100 text-slate-400"
+            )}>
+              <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-pulse" />
+              Di «empieza»
+            </span>
+          ) : null}
+
           {/* Badge de estado — LISTENING pero mic aún no abierto */}
           {enEscucha && !whisperTranscribiendo ? (
             <span className={cn(
