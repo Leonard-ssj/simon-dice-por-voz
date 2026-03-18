@@ -25,6 +25,21 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 from config_test import WS_HOST, WS_PORT, DEBUG, WHISPER_MODEL
 
+# Contexto de vocabulario para guiar a Whisper.
+# Mismo prompt que usa el browser (whisper.worker.ts) para consistencia.
+# Debe estar en minúsculas — el modelo fue entrenado con texto mixto, no ALL CAPS.
+INITIAL_PROMPT = (
+    "rojo verde azul amarillo "
+    "di rojo di verde di azul di amarillo "
+    "el color es rojo es verde es azul es amarillo "
+    "empieza inicia comienza jugar arranca vamos ya "
+    "para pausa espera para el juego "
+    "repite otra vez de nuevo "
+    "reinicia reset volver empezar de nuevo "
+    "simon dice simon dice por voz nivel uno dos tres cuatro cinco "
+    "correcto incorrecto fin del juego sí no"
+)
+
 try:
     import websockets.asyncio.server as _ws_server
     import websockets.asyncio.client  # noqa — verifica que el paquete está completo
@@ -41,9 +56,10 @@ class ServidorWS:
         self._listo = threading.Event()
 
         # Callbacks
-        self.on_comando           = None  # callback(str)  — fallback: panel manda texto
+        self.on_comando           = None  # callback(str)   — fallback: panel manda texto
         self.on_audio             = None  # callback(bytes) — audio PCM para transcribir
-        self.on_cliente_conectado = None  # callback()     — un cliente se conectó
+        self.on_pausar_timeout    = None  # callback()      — pausar timer del juego inmediatamente
+        self.on_cliente_conectado = None  # callback()      — un cliente se conectó
 
         # Whisper local
         self._whisper_model      = None
@@ -93,8 +109,9 @@ class ServidorWS:
                 result = self._whisper_model.transcribe(
                     audio_np,
                     language="es",
-                    fp16=False,
+                    fp16=False,      # True si tienes GPU NVIDIA con CUDA
                     task="transcribe",
+                    initial_prompt=INITIAL_PROMPT,
                 )
             texto = result["text"].strip()
 
@@ -155,7 +172,9 @@ class ServidorWS:
         try:
             async for mensaje in websocket:
                 if isinstance(mensaje, bytes):
-                    # Audio PCM enviado por el browser en modo Whisper local
+                    # Audio PCM Float32 enviado por el browser en modo Whisper local.
+                    # El timer del juego ya fue pausado por el mensaje PTT_INICIO
+                    # que llegó justo antes del audio (misma conexión, orden garantizado).
                     if self.on_audio:
                         threading.Thread(
                             target=self.on_audio,
@@ -164,10 +183,20 @@ class ServidorWS:
                             name="whisper-infer",
                         ).start()
                 else:
-                    # Texto JSON — fallback WASM o comandos de control
+                    # Texto JSON — control, fallback WASM o comandos directos
                     try:
                         data = json.loads(mensaje)
-                        if data.get("tipo") == "comando" and self.on_comando:
+                        tipo = data.get("tipo", "")
+
+                        if tipo == "control":
+                            # PTT_INICIO: el usuario acaba de presionar PTT.
+                            # Pausar el timer del juego AQUÍ, en el hilo del WebSocket
+                            # (antes de spawnear el hilo de Whisper) para evitar la
+                            # race condition entre el tick() y _on_audio_recibido().
+                            if data.get("accion") == "PTT_INICIO" and self.on_pausar_timeout:
+                                self.on_pausar_timeout()
+
+                        elif tipo == "comando" and self.on_comando:
                             threading.Thread(
                                 target=self.on_comando,
                                 args=(data["comando"],),

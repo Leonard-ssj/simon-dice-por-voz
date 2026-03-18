@@ -199,11 +199,11 @@ def _on_cliente_conectado():
 def _on_audio_recibido(audio_bytes: bytes):
     """
     Audio PCM Float32 16kHz enviado desde el browser en modo PTT.
-    Python transcribe con Whisper local, procesa el comando y notifica al panel.
+    El timer ya fue pausado por PTT_INICIO antes de recibir el audio;
+    aquí solo transcribimos y reanudamos el timer al terminar.
     """
-    juego.pausar_timeout()  # pausar timer mientras Whisper infiere (~1s)
     texto, comando = ws.transcribir(audio_bytes)
-    juego.reanudar_timeout()
+    juego.reanudar_timeout()  # reanudar DESPUÉS de transcribir
 
     # Informar al panel del texto transcripto y el comando resultante
     ws.enviar_voz(texto, comando)
@@ -241,6 +241,7 @@ def _registrar_callbacks():
     juego.on_log           = _on_log
 
     ws.on_audio             = _on_audio_recibido
+    ws.on_pausar_timeout    = juego.pausar_timeout
     ws.on_comando           = _on_comando_panel
     ws.on_cliente_conectado = _on_cliente_conectado
 

@@ -120,6 +120,14 @@ export function useWebSocket() {
     }
   }, []);
 
+  // Señal de control — llega antes del audio binario en la misma conexión TCP,
+  // por lo que Python puede pausar el timer SIN race condition con el tick.
+  const enviarControl = useCallback((accion: string) => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ tipo: "control", accion }));
+    }
+  }, []);
+
   // ---- Grabación PCM raw (para Whisper local en Python) ----
 
   const iniciarGrabacionRaw = useCallback(async () => {
@@ -201,6 +209,12 @@ export function useWebSocket() {
 
     if (whisperDisponibleRef.current) {
       // ── Modo Whisper local: grabar audio raw → enviar binario a Python ──
+      // Pausar el timer del juego ANTES de empezar a grabar.
+      // PTT_INICIO llega a Python por el mismo socket TCP, antes del audio binario,
+      // lo que elimina la race condition entre pausar_timeout() y tick().
+      if (estadoRef.current === "LISTENING") {
+        enviarControl("PTT_INICIO");
+      }
       try {
         setRawGrabandoAll(true);
         await iniciarGrabacionRaw();
@@ -239,7 +253,7 @@ export function useWebSocket() {
         escuchandoRef.current = false;
       }
     }
-  }, [whisper, agregarLog, enviarComando, iniciarGrabacionRaw, setRawGrabandoAll]);
+  }, [whisper, agregarLog, enviarComando, enviarControl, iniciarGrabacionRaw, setRawGrabandoAll]);
 
   useEffect(() => {
     iniciarPTTRef.current = iniciarPTTVoz;
