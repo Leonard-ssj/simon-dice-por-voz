@@ -100,8 +100,8 @@ export default function ConnectionPanel({
         </span>
       )}
 
-      {/* Badge + barra de nivel de Whisper */}
-      {mostrarWhisper && (
+      {/* Badge + barra de nivel de Whisper — solo cuando conectado o ya cargado */}
+      {mostrarWhisper && (conectado || whisperCargado || whisperProgreso !== "") && (
         <div className="flex items-center gap-2">
           {/* Botón PTT — mantener presionado para hablar */}
           {puedoHablar && iniciarPTT && finalizarPTT ? (
@@ -237,7 +237,7 @@ export default function ConnectionPanel({
         variant={conectado ? "destructive" : "success"}
         size="sm"
         onClick={conectado ? onDesconectar : onConectar}
-        disabled={!conectado && !whisperCargado}
+        disabled={modo === "serial" && !serialDisponible && !conectado}
       >
         {conectado ? "Desconectar" : "Conectar"}
       </Button>
