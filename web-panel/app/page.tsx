@@ -164,31 +164,28 @@ export default function Home() {
           )}
         </AnimatePresence>
 
-        {/* ── Área principal: 3 columnas, flex-1 ── */}
+        {/* ── Área principal: 2 columnas, flex-1 ── */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-3 flex-1 min-h-0">
 
-          {/* Columna izquierda: LEDs + Secuencia (2/5) */}
-          <div className="lg:col-span-2 flex flex-col gap-3 min-h-0">
+          {/* ── Columna izquierda: LEDs + Secuencia (2/5) ── */}
+          <div className="lg:col-span-2 flex flex-col gap-3">
             <div className={cn(
-              "rounded-2xl border p-5 flex flex-col items-center justify-center gap-3 shrink-0",
+              "rounded-2xl border p-5 flex flex-col items-center gap-3 shrink-0",
               dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
             )}>
               <p className={cn(
                 "text-xs font-semibold uppercase tracking-widest self-start",
                 dark ? "text-white/25" : "text-slate-400"
-              )}>
-                Panel de LEDs
-              </p>
+              )}>Panel de LEDs</p>
               <LEDPanel activo={ledActivo} secuencia={estadoJuego.secuencia} dark={dark} />
             </div>
 
-            {/* Secuencia — compacta */}
             <div className={cn(
-              "rounded-2xl border p-3 flex flex-col min-h-0 shrink-0",
+              "rounded-2xl border px-4 py-3 shrink-0",
               dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
             )}>
               <p className={cn(
-                "text-[10px] font-semibold uppercase tracking-widest mb-1.5",
+                "text-[10px] font-semibold uppercase tracking-widest mb-2",
                 dark ? "text-white/25" : "text-slate-400"
               )}>
                 Secuencia{estadoJuego.secuencia.length > 0 && ` · ${estadoJuego.secuencia.length} pasos`}
@@ -197,33 +194,38 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Columna centro: Estado + Score (1/5) */}
-          <div className="lg:col-span-1 flex flex-col gap-3 min-h-0">
-            <div className={cn(
-              "rounded-2xl border p-4 flex flex-col gap-2 shrink-0",
-              dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
-            )}>
-              <p className={cn(
-                "text-xs font-semibold uppercase tracking-widest",
-                dark ? "text-white/25" : "text-slate-400"
-              )}>Estado</p>
-              <GameStatus
-                estado={estadoJuego.estado}
-                ultimaDeteccion={estadoJuego.ultimaDeteccion}
-                ultimoTextoWhisper={estadoJuego.ultimoTextoWhisper}
-                ultimoResultado={estadoJuego.ultimoResultado}
-                dark={dark}
-                grabando={whisperGrabando || estadoJuego.whisperTranscribiendo}
-              />
+          {/* ── Columna derecha: Estado + Score + Log (3/5) ── */}
+          <div className="lg:col-span-3 flex flex-col gap-3 min-h-0">
+
+            {/* Estado + Score en una fila horizontal */}
+            <div className="grid grid-cols-2 gap-3 shrink-0">
+              <div className={cn(
+                "rounded-2xl border p-4 flex flex-col gap-2",
+                dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
+              )}>
+                <p className={cn(
+                  "text-xs font-semibold uppercase tracking-widest",
+                  dark ? "text-white/25" : "text-slate-400"
+                )}>Estado</p>
+                <GameStatus
+                  estado={estadoJuego.estado}
+                  ultimaDeteccion={estadoJuego.ultimaDeteccion}
+                  ultimoTextoWhisper={estadoJuego.ultimoTextoWhisper}
+                  ultimoResultado={estadoJuego.ultimoResultado}
+                  dark={dark}
+                  grabando={whisperGrabando || estadoJuego.whisperTranscribiendo}
+                />
+              </div>
+
+              <ScoreBoard nivel={estadoJuego.nivel} puntuacion={estadoJuego.puntuacion} dark={dark} />
             </div>
-            <ScoreBoard nivel={estadoJuego.nivel} puntuacion={estadoJuego.puntuacion} dark={dark} />
-          </div>
 
-          {/* Columna derecha: Log — ocupa todo el alto (2/5) */}
-          <div className="lg:col-span-2 min-h-0 flex flex-col">
-            <LogConsole log={estadoJuego.log} dark={dark} onClear={limpiarLog} />
-          </div>
+            {/* Log — ocupa todo el espacio restante */}
+            <div className="flex-1 min-h-0">
+              <LogConsole log={estadoJuego.log} dark={dark} onClear={limpiarLog} />
+            </div>
 
+          </div>
         </div>
 
       </div>

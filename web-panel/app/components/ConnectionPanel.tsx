@@ -227,7 +227,7 @@ export default function ConnectionPanel({
         </button>
       )}
 
-      {/* Estado conexión */}
+      {/* Estado + botón conectar — siempre en la primera fila */}
       <div className="ml-auto flex items-center gap-2">
         <div className={cn(
           "flex items-center gap-1.5 text-xs font-medium",
@@ -239,9 +239,17 @@ export default function ConnectionPanel({
         {conectado && (
           <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
         )}
+        <Button
+          variant={conectado ? "destructive" : "success"}
+          size="sm"
+          onClick={conectado ? onDesconectar : onConectar}
+          disabled={modo === "serial" && !serialDisponible && !conectado}
+        >
+          {conectado ? "Desconectar" : "Conectar"}
+        </Button>
       </div>
 
-      {/* Info de dispositivos — visible solo cuando conectado */}
+      {/* Info de dispositivos — segunda fila cuando conectado */}
       {conectado && (dispositivoMic || dispositivoSpeaker || whisperModelo) && (
         <div className="basis-full flex items-center gap-4 flex-wrap pt-1 border-t border-white/5 text-xs">
           {dispositivoMic && (
@@ -270,16 +278,6 @@ export default function ConnectionPanel({
           )}
         </div>
       )}
-
-      {/* Botón conectar/desconectar */}
-      <Button
-        variant={conectado ? "destructive" : "success"}
-        size="sm"
-        onClick={conectado ? onDesconectar : onConectar}
-        disabled={modo === "serial" && !serialDisponible && !conectado}
-      >
-        {conectado ? "Desconectar" : "Conectar"}
-      </Button>
     </div>
   );
 }
