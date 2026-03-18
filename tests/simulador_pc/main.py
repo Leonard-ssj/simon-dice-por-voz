@@ -216,6 +216,7 @@ def _on_ptt_fin():
 
     if len(audio_np) < 1600:  # < 0.1s de audio — ignorar
         log("[Voz] Audio demasiado corto, ignorado.", "info")
+        ws.enviar_voz("", "DESCONOCIDO")  # limpiar estado PTT en el browser
         juego.reanudar_timeout()
         return
 

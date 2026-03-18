@@ -106,6 +106,26 @@ def _detectar_voz_espanol() -> str:
     return ""
 
 
+def _nombre_corto_voz(nombre: str) -> str:
+    """
+    Extrae el nombre personal de la voz para usar con SelectVoice.
+    SelectVoice hace matching parcial: "Sabina" coincide con
+    "Microsoft Sabina Desktop - Spanish (Mexico)".
+    Usar el nombre completo falla en PowerShell por los guiones y paréntesis.
+
+    Ejemplos:
+      "Microsoft Sabina Desktop - Spanish (Mexico)" → "Sabina"
+      "Microsoft Helena Desktop" → "Helena"
+      "Microsoft Pablo Desktop" → "Pablo"
+    """
+    excluir = {"microsoft", "desktop", "mobile", "online", "speech", "neural"}
+    for palabra in nombre.split():
+        limpia = palabra.strip("(),-.").lower()
+        if limpia not in excluir and limpia and palabra[0].isupper():
+            return palabra.strip("(),-.")
+    return nombre
+
+
 def _hablar_powershell(texto: str) -> None:
     """
     Habla 'texto' usando PowerShell + System.Speech (SAPI).
@@ -113,13 +133,23 @@ def _hablar_powershell(texto: str) -> None:
     """
     # Escapar comillas para no romper el script de PowerShell
     safe = texto.replace('"', "'")
-    voz_cmd = f'$s.SelectVoice("{_voz_nombre}"); ' if _voz_nombre else ""
+
+    if _voz_nombre:
+        # Usar nombre corto: SelectVoice("Sabina") en lugar del nombre completo
+        # que incluye paréntesis y guiones que pueden fallar en PowerShell.
+        nombre_corto = _nombre_corto_voz(_voz_nombre)
+        voz_cmd = (
+            f'try {{ $s.SelectVoice("{nombre_corto}") }} '
+            f'catch {{ try {{ $s.SelectVoice("{_voz_nombre}") }} catch {{}} }}; '
+        )
+    else:
+        voz_cmd = ""
 
     script = (
         "Add-Type -AssemblyName System.Speech; "
         "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
         f"{voz_cmd}"
-        "$s.Rate = 0; "          # 0 = velocidad normal (suena más natural)
+        "$s.Rate = -1; "         # -1 = ligeramente más lento, más natural en español
         f'$s.Speak("{safe}")'
     )
 

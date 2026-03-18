@@ -286,6 +286,11 @@ export function useWebSocket() {
 
           case "result":
             siguiente.ultimoResultado = msg.resultado as ResultadoTurno;
+            // El turno terminó — limpiar estado de grabación por si acaso
+            // (cubre el caso donde audio muy corto no disparó el mensaje "voz")
+            setRawProcesandoAll(false);
+            setRawGrabandoAll(false);
+            escuchandoRef.current = false;
             if (msg.resultado === "CORRECT") {
               agregarLog("Correcto ✓", "correcto");
             } else if (msg.resultado === "WRONG") {
@@ -318,6 +323,9 @@ export function useWebSocket() {
             siguiente.esperado           = null;
             siguiente.ultimaDeteccion    = null;
             siguiente.ultimoTextoWhisper = null;
+            setRawProcesandoAll(false);
+            setRawGrabandoAll(false);
+            escuchandoRef.current = false;
             agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
             break;
 
