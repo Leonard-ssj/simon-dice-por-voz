@@ -4,10 +4,12 @@
 # Usado por el simulador (tests/simulador_pc/main.py).
 # Reemplaza el hardware del ESP32 (MAX98357A speaker) en pruebas.
 #
-# TTS: PowerShell + System.Speech.SpeechSynthesizer (Windows SAPI).
-#   Garantiza que la voz suene aunque pyttsx3.runAndWait() se bloquee,
-#   que es un bug conocido de pyttsx3 en hilos de Windows.
-#   pyttsx3 se usa SOLO para detectar el nombre de la voz en español.
+# TTS — orden de preferencia:
+#   1. edge-tts + pygame: voz neural "es-MX-DaliaNeural" (Microsoft Edge, requiere
+#      internet). Sonido natural, acento mexicano real.
+#      Instalar: pip install edge-tts pygame
+#   2. PowerShell SAPI (fallback): voz local instalada en Windows.
+#      Calidad variable según las voces instaladas.
 #
 # Funciones públicas:
 #   reproducir_sonido()  — tonos de eventos del juego
@@ -16,6 +18,8 @@
 #   esperar_tts()        — espera a que el TTS esté listo
 # ============================================================
 
+import asyncio
+import io
 import subprocess
 import numpy as np
 import sounddevice as sd
@@ -24,6 +28,21 @@ import os
 import time
 import queue
 import threading
+
+# ---- Intentar importar edge-tts + pygame (voz neural mexicana) ----
+try:
+    import edge_tts as _edge_tts_mod
+    _EDGE_TTS_DISPONIBLE = True
+    EDGE_TTS_VOZ = "es-MX-DaliaNeural"   # voz neural femenina mexicana
+except ImportError:
+    _EDGE_TTS_DISPONIBLE = False
+    EDGE_TTS_VOZ = ""
+
+try:
+    import pygame as _pygame_mod
+    _PYGAME_DISPONIBLE = True
+except ImportError:
+    _PYGAME_DISPONIBLE = False
 
 sys.path.insert(0, os.path.dirname(__file__))
 from config_test import (
@@ -55,7 +74,8 @@ FRECUENCIAS_ESPECIALES = {
 
 _tts_queue: queue.Queue = queue.Queue()
 _tts_listo  = threading.Event()
-_voz_nombre = ""   # nombre de la voz en español (encontrada durante inicialización)
+_voz_nombre   = ""    # nombre de la voz SAPI en español
+_usar_edge    = False  # True cuando edge-tts + pygame están listos
 
 
 def _detectar_voz_espanol() -> str:
@@ -168,18 +188,64 @@ def _hablar_powershell(texto: str) -> None:
             print(f"[TTS] Error PowerShell: {e}")
 
 
+async def _edge_generar_mp3(texto: str) -> bytes:
+    """Genera audio MP3 con edge-tts (voz neural mexicana)."""
+    communicate = _edge_tts_mod.Communicate(texto, EDGE_TTS_VOZ)
+    data = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            data += chunk["data"]
+    return data
+
+
+def _hablar_edge(texto: str) -> None:
+    """
+    Habla usando Microsoft Edge TTS Neural (es-MX-DaliaNeural).
+    Requiere internet. Bloquea hasta que termina.
+    Si falla, usa PowerShell SAPI como fallback.
+    """
+    try:
+        mp3_data = asyncio.run(_edge_generar_mp3(texto))
+        mp3_io = io.BytesIO(mp3_data)
+        _pygame_mod.mixer.music.load(mp3_io, "mp3")
+        _pygame_mod.mixer.music.play()
+        while _pygame_mod.mixer.music.get_busy():
+            time.sleep(0.05)
+    except Exception as e:
+        if DEBUG:
+            print(f"[TTS] edge-tts error: {e} — usando SAPI")
+        _hablar_powershell(texto)
+
+
 def _tts_worker():
-    """Hilo dedicado. Detecta la voz y luego procesa la cola de frases."""
-    global _voz_nombre
-    _voz_nombre = _detectar_voz_espanol()
-    _tts_listo.set()   # señalizar que el TTS está listo para recibir frases
+    """Hilo dedicado. Inicializa TTS y procesa la cola de frases."""
+    global _voz_nombre, _usar_edge
+
+    # Intentar activar edge-tts + pygame (voz neural mexicana)
+    if _EDGE_TTS_DISPONIBLE and _PYGAME_DISPONIBLE:
+        try:
+            _pygame_mod.mixer.init()
+            _usar_edge = True
+            print(f"[TTS] Edge TTS activo — voz neural: {EDGE_TTS_VOZ}")
+        except Exception as e:
+            print(f"[TTS] pygame init falló ({e}), usando SAPI")
+
+    if not _usar_edge:
+        if not _EDGE_TTS_DISPONIBLE:
+            print("[TTS] edge-tts no instalado — ejecuta: pip install edge-tts pygame")
+        _voz_nombre = _detectar_voz_espanol()
+
+    _tts_listo.set()
 
     while True:
         texto = _tts_queue.get()
         if texto is None:
             break
         try:
-            _hablar_powershell(texto)
+            if _usar_edge:
+                _hablar_edge(texto)
+            else:
+                _hablar_powershell(texto)
         except Exception as e:
             if DEBUG:
                 print(f"[TTS] Error inesperado: {e}")

@@ -196,6 +196,7 @@ export default function Home() {
                 ultimoTextoWhisper={estadoJuego.ultimoTextoWhisper}
                 ultimoResultado={estadoJuego.ultimoResultado}
                 dark={dark}
+                grabando={whisperGrabando || estadoJuego.whisperTranscribiendo}
               />
             </div>
             <ScoreBoard nivel={estadoJuego.nivel} puntuacion={estadoJuego.puntuacion} dark={dark} />

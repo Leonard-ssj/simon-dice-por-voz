@@ -41,7 +41,7 @@ const COLOR_BADGE: Record<string, string> = {
   AMARILLO: "bg-yellow-400 text-yellow-900",
 };
 
-export default function GameStatus({ estado, ultimaDeteccion, ultimoTextoWhisper, ultimoResultado, dark }: Props) {
+export default function GameStatus({ estado, ultimaDeteccion, ultimoTextoWhisper, ultimoResultado, dark, grabando = false }: Props & { grabando?: boolean }) {
   const config = ESTADO_CONFIG[estado] ?? ESTADO_CONFIG.IDLE;
   const { Icon } = config;
   const colorClass = dark ? config.colorDark : config.colorLight;
@@ -75,6 +75,26 @@ export default function GameStatus({ estado, ultimaDeteccion, ultimoTextoWhisper
             {config.label}
           </span>
         </motion.div>
+      </AnimatePresence>
+
+      {/* Hint PTT — solo cuando es turno del jugador y no está grabando */}
+      <AnimatePresence>
+        {estado === "LISTENING" && !grabando && (
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
+            className={cn("text-xs text-center", dark ? "text-white/40" : "text-slate-400")}
+          >
+            Presiona{" "}
+            <kbd className={cn(
+              "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono border",
+              dark ? "border-white/20 bg-white/8 text-white/60" : "border-slate-300 bg-slate-100 text-slate-600"
+            )}>ESPACIO</kbd>
+            {" "}o el botón 🎤 para hablar
+          </motion.p>
+        )}
       </AnimatePresence>
 
       {/* Última detección — prominente */}

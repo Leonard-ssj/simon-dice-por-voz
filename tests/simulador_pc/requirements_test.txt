@@ -3,3 +3,5 @@ numpy
 websockets
 pyttsx3
 openai-whisper
+edge-tts        # voz neural mexicana (es-MX-DaliaNeural) — requiere internet
+pygame          # reproducción MP3 de edge-tts
