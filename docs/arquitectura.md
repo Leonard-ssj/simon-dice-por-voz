@@ -4,12 +4,12 @@
 
 El sistema tiene dos modos de operación, ambos usan el mismo Web Panel en Next.js:
 
-| Modo | Cuándo usarlo | Requiere |
-|---|---|---|
-| **Simulador PC** | Pruebas sin hardware | Python + Chrome/Edge |
-| **Modo ESP32** | Con kit ESP32 real (producción) | Kit + cable USB + Chrome/Edge |
+| Modo             | Cuándo usarlo                   | Requiere                      |
+| ---------------- | ------------------------------- | ----------------------------- |
+| **Simulador PC** | Pruebas sin hardware            | Python + Chrome/Edge          |
+| **Modo ESP32**   | Con kit ESP32 real (producción) | Kit + cable USB + Chrome/Edge |
 
----
+***
 
 ## Diagrama general del sistema
 
@@ -49,7 +49,7 @@ graph TD
   WASM -->|"texto transcrito"| SERIAL_HOOK
 ```
 
----
+***
 
 ## Modo Simulador PC
 
@@ -72,14 +72,16 @@ flowchart LR
 ```
 
 **Preferido — Whisper local en Python:**
+
 - Python captura el micrófono del sistema directamente con `sounddevice`
 - El browser **NO** necesita permisos de micrófono
 - Browser envía `PTT_INICIO` / `PTT_FIN` al presionar/soltar el botón o barra espaciadora
 - Python graba, transcribe con `openai-whisper` (modelo `small`) y devuelve texto+comando
 
 **Fallback — Whisper WASM en browser:**
+
 - Solo se activa si Python no tiene Whisper instalado
-- El browser descarga el modelo (`onnx-community/whisper-small`, ~125 MB, se cachea)
+- El browser descarga el modelo (`onnx-community/whisper-small`, \~125 MB, se cachea)
 - El browser captura el micrófono con Web Audio API (modo PTT)
 
 ### Flujo PTT completo (Whisper local)
@@ -118,16 +120,17 @@ flowchart TD
 ```
 
 **Eventos narrados:**
+
 - Conexión: bienvenida + instrucciones ("presiona el botón y di empieza")
 - SHOWING: "Mira y escucha." + nombre de cada color al mostrarlo
 - LISTENING: "Tu turno. Presiona el botón para hablar."
 - CORRECT: "Correcto."
-- LEVEL_UP: "Nivel N."
+- LEVEL\_UP: "Nivel N."
 - WRONG: "Incorrecto. Di empieza para intentar de nuevo."
 - TIMEOUT: "Tiempo agotado. Di empieza para intentar de nuevo."
-- GAME_OVER: "Fin del juego. Obtuviste N puntos. Di empieza para volver a jugar."
+- GAME\_OVER: "Fin del juego. Obtuviste N puntos. Di empieza para volver a jugar."
 
----
+***
 
 ## Modo ESP32 — Producción
 
@@ -200,6 +203,7 @@ flowchart LR
 ### Mensajes del protocolo Serial
 
 **ESP32 → browser:**
+
 ```
 READY               sistema inicializado
 STATE:IDLE          esperando inicio
@@ -220,12 +224,13 @@ SCORE:30            puntuación actual
 ```
 
 **browser → ESP32:**
+
 ```
 ROJO\n              comando reconocido por Whisper
 DESCONOCIDO\n       no se entendió
 ```
 
----
+***
 
 ## Máquina de estados del juego
 
@@ -256,21 +261,21 @@ stateDiagram-v2
   GAME_OVER --> IDLE : START / REINICIAR
 ```
 
----
+***
 
 ## IA — Whisper
 
-| | Whisper local (Python) | Whisper WASM (browser) |
-|---|---|---|
-| Librería | `openai-whisper` | `@huggingface/transformers` v3 |
-| Modelo | `small` (244 MB) | `small` cuantizado INT8 (125 MB) |
-| Micrófono | Python `sounddevice` | Web Audio API |
-| Permisos mic browser | No necesita | Sí |
-| Latencia (CPU) | 2–8 s | 1–3 s |
-| Caché | carpeta `~/.cache/whisper` | IndexedDB del browser |
-| Disponible en | Solo simulador PC | Simulador (fallback) + ESP32 |
+| <br />               | Whisper local (Python)     | Whisper WASM (browser)           |
+| -------------------- | -------------------------- | -------------------------------- |
+| Librería             | `openai-whisper`           | `@huggingface/transformers` v3   |
+| Modelo               | `small` (244 MB)           | `small` cuantizado INT8 (125 MB) |
+| Micrófono            | Python `sounddevice`       | Web Audio API                    |
+| Permisos mic browser | No necesita                | Sí                               |
+| Latencia (CPU)       | 2–8 s                      | 1–3 s                            |
+| Caché                | carpeta `~/.cache/whisper` | IndexedDB del browser            |
+| Disponible en        | Solo simulador PC          | Simulador (fallback) + ESP32     |
 
----
+***
 
 ## Estructura de carpetas
 
@@ -317,11 +322,12 @@ sistemas-inteligentes/
     └── setup.md
 ```
 
----
+***
 
 ## Modos del panel
 
-| Modo | Toggle | Cuándo usar |
-|---|---|---|
+| Modo                      | Toggle      | Cuándo usar                      |
+| ------------------------- | ----------- | -------------------------------- |
 | **Simulador — WebSocket** | "WebSocket" | `python main.py` corriendo en PC |
-| **ESP32 — Web Serial** | "Serial" | Kit ESP32 conectado por USB |
+| **ESP32 — Web Serial**    | "Serial"    | Kit ESP32 conectado por USB      |
+
