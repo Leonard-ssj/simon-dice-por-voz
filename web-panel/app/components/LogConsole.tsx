@@ -45,20 +45,19 @@ export default function LogConsole({ log, dark, onClear }: Props) {
 
   const logFiltrado = filtro === "todos" ? log : log.filter((e) => e.tipo === filtro);
 
-  // Newest at top — forzar scroll al inicio cuando llega mensaje nuevo.
-  // overflow-anchor:none en el contenedor evita que el browser reajuste
-  // automáticamente el scroll al insertar elementos arriba.
+  // Auto-scroll al fondo — el mensaje más reciente siempre visible abajo
   useEffect(() => {
     if (autoScroll && listRef.current) {
-      listRef.current.scrollTop = 0;
+      listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [log.length, autoScroll]);
 
-  // Si el usuario bajó a revisar historial (top=recientes, bottom=antiguos)
+  // Pausa auto-scroll si el usuario sube a ver historial
   function handleScroll() {
     const el = listRef.current;
     if (!el) return;
-    setAutoScroll(el.scrollTop < 40);
+    const distanciaAlFondo = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setAutoScroll(distanciaAlFondo < 40);
   }
 
   function copiarLog() {
@@ -151,13 +150,11 @@ export default function LogConsole({ log, dark, onClear }: Props) {
         })}
       </div>
 
-      {/* Lista — overflow-anchor:none impide que el browser reajuste el scroll
-          al insertar nuevos elementos arriba (newest-at-top pattern) */}
+      {/* Lista — cronológico: oldest arriba, newest abajo */}
       <div
         ref={listRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-2 font-mono text-[11px] space-y-px min-h-0"
-        style={{ overflowAnchor: "none" }}
       >
         {logFiltrado.length === 0 && (
           <p className={cn("italic p-2", dark ? "text-white/15" : "text-slate-300")}>
@@ -165,7 +162,7 @@ export default function LogConsole({ log, dark, onClear }: Props) {
           </p>
         )}
         <AnimatePresence initial={false}>
-          {[...logFiltrado].reverse().map((e) => {
+          {logFiltrado.map((e) => {
             const c = TIPO_CONFIG[e.tipo];
             return (
               <motion.div
@@ -204,7 +201,7 @@ export default function LogConsole({ log, dark, onClear }: Props) {
             exit={{ opacity: 0, y: 4 }}
             onClick={() => {
               setAutoScroll(true);
-              if (listRef.current) listRef.current.scrollTop = 0;
+              if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
             }}
             className={cn(
               "flex items-center justify-center gap-1.5 w-full py-1.5 text-xs border-t transition-colors shrink-0",
@@ -213,7 +210,7 @@ export default function LogConsole({ log, dark, onClear }: Props) {
                 : "border-slate-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
             )}
           >
-            <ChevronDown size={11} className="rotate-180" /> Ver recientes
+            <ChevronDown size={11} /> Ver recientes
           </motion.button>
         )}
       </AnimatePresence>
