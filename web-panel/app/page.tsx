@@ -13,6 +13,7 @@ import SequenceDisplay from "./components/SequenceDisplay";
 import LogConsole from "./components/LogConsole";
 import ScoreBoard from "./components/ScoreBoard";
 import HowToPlay from "./components/HowToPlay";
+import TurnoTimer from "./components/TurnoTimer";
 import ParticleBackground from "./components/ParticleBackground";
 import type { ColorJuego } from "../types/game";
 
@@ -192,6 +193,14 @@ export default function Home() {
               </p>
               <SequenceDisplay secuencia={estadoJuego.secuencia} esperado={estadoJuego.esperado} />
             </div>
+
+            {/* Temporizador de turno / Referencia de comandos */}
+            <TurnoTimer
+              estado={estadoJuego.estado}
+              esperado={estadoJuego.esperado}
+              dark={dark}
+              timeoutMs={30000}
+            />
           </div>
 
           {/* ── Columna derecha: Estado + Score + Log (3/5) ── */}
