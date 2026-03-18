@@ -67,6 +67,8 @@ export function useWebSocket() {
   // Ventana de silencio — mientras Date.now() < silencioHastaRef, el mic NO abre.
   // Evita que el mic capture el TTS del simulador Python como comandos de voz.
   const silencioHastaRef = useRef<number>(0);
+  // Evita loguear "Escuchando..." más de una vez por sesión de LISTENING
+  const yaLogueadoEscuchandoRef = useRef(false);
 
   const whisper = useWhisperWASM();
 
@@ -100,13 +102,19 @@ export function useWebSocket() {
     }
     escuchandoVozRef.current = true;
 
-    // Solo loguear "Escuchando..." cuando el juego realmente pide voz
-    if (estadoRef.current === "LISTENING") {
+    // Solo loguear "Escuchando..." UNA VEZ por sesión de LISTENING (no cada iteración del bucle)
+    if (estadoRef.current === "LISTENING" && !yaLogueadoEscuchandoRef.current) {
+      yaLogueadoEscuchandoRef.current = true;
       agregarLog("Escuchando... habla ahora", "sistema");
     }
 
+    // Callback que pausa el timer del juego mientras Whisper hace inferencia
+    const onProcesandoInicio = estadoRef.current === "LISTENING"
+      ? () => enviarComando("WHISPER_PROCESANDO")
+      : undefined;
+
     try {
-      const textoRaw = await whisper.escuchar();
+      const textoRaw = await whisper.escuchar(onProcesandoInicio);
       const comando  = textoAComando(textoRaw);
 
       // Solo loguear en LISTENING — en IDLE/GAMEOVER escuchamos en segundo plano sin spam
@@ -183,9 +191,12 @@ export function useWebSocket() {
               siguiente.ultimoTextoWhisper = null;
               siguiente.ultimoResultado    = null;
             }
-            // Cuando empieza LISTENING: limpiar ventana de silencio para escuchar de inmediato
+            // Cuando empieza LISTENING: dar 1.5s para que el TTS "Tu turno." termine
+            // antes de abrir el mic. Usar max() para no clobber ventanas de silencio más largas.
             if (msg.estado === "LISTENING") {
-              silencioHastaRef.current = 0;
+              yaLogueadoEscuchandoRef.current = false;  // resetear log-once para este turno
+              const finMuteMinimo = Date.now() + 1500;
+              silencioHastaRef.current = Math.max(silencioHastaRef.current, finMuteMinimo);
             }
             agregarLog(`Estado: ${NOMBRES_ESTADO[msg.estado] ?? msg.estado}`, "info");
             break;
@@ -261,7 +272,8 @@ export function useWebSocket() {
   );
 
   const conectar = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) return;
+    if (ws.current?.readyState === WebSocket.OPEN ||
+        ws.current?.readyState === WebSocket.CONNECTING) return;
 
     agregarLog(`Conectando a ${WS_URL}...`, "sistema");
     const socket = new WebSocket(WS_URL);
@@ -269,8 +281,8 @@ export function useWebSocket() {
     socket.onopen = () => {
       setEstadoJuego((prev) => ({ ...prev, conectado: true }));
       agregarLog("Conexión WebSocket establecida", "sistema");
-      // Silenciar mic durante la narración de bienvenida del TTS Python (~7s)
-      silencioHastaRef.current = Date.now() + 8000;
+      // Silenciar mic durante la narración de bienvenida del TTS Python (~18s, 5 frases)
+      silencioHastaRef.current = Date.now() + 20000;
       // Arrancar el bucle continuo de voz
       bucleVozActivoRef.current = true;
       bucleVoz();

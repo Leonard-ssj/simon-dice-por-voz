@@ -11,11 +11,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // ---- Parámetros de captura de audio ----
 const SAMPLE_RATE       = 16000;  // Hz — mismo que Whisper espera
 const BUFFER_SIZE       = 4096;   // muestras por bloque (~256ms a 16kHz)
-const VAD_THRESHOLD     = 0.015;  // RMS mínimo para considerar voz (reducido de 0.025)
-const BLOQUES_CONFIRMAR = 1;     // bloques consecutivos para confirmar voz
-const SILENCIO_TOLERADO = 500;   // ms de silencio para cortar — corto para capturar UNA PALABRA rápido
-const DURACION_MINIMA   = 150;   // ms mínimos de audio para enviar a Whisper
-const TIMEOUT_GRABACION = 8000;  // ms máximos esperando voz antes de timeout
+const VAD_THRESHOLD     = 0.015;  // RMS mínimo para considerar voz
+const BLOQUES_CONFIRMAR = 1;      // bloques consecutivos para confirmar voz
+const SILENCIO_TOLERADO = 800;    // ms de silencio para cortar — 800ms evita cortar palabras largas
+const DURACION_MINIMA   = 300;    // ms mínimos de audio para enviar a Whisper (filtra ruido corto)
+const TIMEOUT_GRABACION = 12000;  // ms máximos esperando voz antes de timeout
 
 // ---- Tipos internos del worker ----
 type MsgWorker =
@@ -42,7 +42,7 @@ export interface UseWhisperWASMReturn {
   micAbierto:       boolean;       // true cuando getUserMedia tuvo éxito (mic abierto)
   procesando:       boolean;       // true mientras Whisper hace inferencia del audio
   tiempoRestante:   number | null; // countdown en segundos hasta timeout (null = no escuchando)
-  escuchar:         () => Promise<string>;
+  escuchar:         (onProcesandoInicio?: () => void) => Promise<string>;
   cancelarEscucha:  () => void;
 }
 
@@ -102,7 +102,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
   }, []);
 
   // ---- Grabar micrófono con VAD y transcribir ----
-  const escuchar = useCallback((): Promise<string> => {
+  const escuchar = useCallback((onProcesandoInicio?: () => void): Promise<string> => {
     return new Promise((resolve) => {
       if (!modeloCargado || transcribiendo) {
         resolve("");
@@ -167,6 +167,7 @@ export function useWhisperWASM(): UseWhisperWASMReturn {
         }
 
         setProcesando(true);
+        onProcesandoInicio?.();   // notifica al caller que Whisper empieza a procesar
         workerRef.current?.postMessage({ tipo: "transcribir", audio }, [audio.buffer]);
         // resolve() se llama desde onmessage cuando llega el resultado
       }

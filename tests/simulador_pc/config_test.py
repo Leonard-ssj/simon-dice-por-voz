@@ -19,7 +19,7 @@ USAR_COLORES_ANSI = True
 # Configuración del juego
 # TIMEOUT_RESPUESTA: tiempo que el jugador tiene para hablar.
 # Considera: latencia Whisper WASM (~2s) + tiempo para hablar (~1s) + margen
-TIMEOUT_RESPUESTA  = 20000  # ms
+TIMEOUT_RESPUESTA  = 30000  # ms — 30s cubre: 1.5s mute + hablar(3s) + Whisper(5s) × varios intentos
 DURACION_LED_SIM   = 800    # ms por LED en la secuencia
 PAUSA_ENTRE_LEDS   = 300    # ms entre LEDs
 NIVEL_INICIAL      = 1

@@ -56,8 +56,9 @@ export function useWebSerial() {
   // Ref que siempre apunta a la versión más reciente de iniciarEscuchaVoz
   const iniciarEscuchaRef = useRef<() => Promise<void>>(async () => {});
   // Ventana de silencio — mientras Date.now() < silencioHastaRef, el mic NO abre.
-  // Evita que el mic capture el TTS del simulador Python como comandos de voz.
   const silencioHastaRef = useRef<number>(0);
+  // Evita loguear "Escuchando..." más de una vez por sesión de LISTENING
+  const yaLogueadoEscuchandoRef = useRef(false);
 
   const whisper = useWhisperWASM();
 
@@ -99,10 +100,14 @@ export function useWebSerial() {
     }
     escuchandoVozRef.current = true;
 
-    setEstadoJuego((prev) => ({ ...prev, whisperTranscribiendo: true }));
-    agregarLog("Escuchando... habla ahora", "sistema");
+    // Solo loguear "Escuchando..." UNA VEZ por sesión de LISTENING
+    if (estadoRef.current === "LISTENING" && !yaLogueadoEscuchandoRef.current) {
+      yaLogueadoEscuchandoRef.current = true;
+      agregarLog("Escuchando... habla ahora", "sistema");
+    }
 
     try {
+      // No enviamos WHISPER_PROCESANDO al ESP32 (firmware no lo entiende)
       const textoRaw = await whisper.escuchar();
       const comando  = textoAComando(textoRaw);
 
@@ -180,9 +185,12 @@ export function useWebSerial() {
           if (nuevoEstado !== "SHOWING") {
             siguiente.ledActivo = null;
           }
-          // Cuando empieza LISTENING: limpiar ventana de silencio para escuchar de inmediato
+          // Cuando empieza LISTENING: dar 1.5s para que el sonido del ESP32 termine
+          // antes de abrir el mic. Usar max() para no clobber ventanas de silencio más largas.
           if (nuevoEstado === "LISTENING") {
-            silencioHastaRef.current = 0;
+            yaLogueadoEscuchandoRef.current = false;
+            const finMuteMinimo = Date.now() + 1500;
+            silencioHastaRef.current = Math.max(silencioHastaRef.current, finMuteMinimo);
           }
           agregarLog(`Estado: ${nuevoEstado}`, "info");
         } else if (linea.startsWith("LED:")) {

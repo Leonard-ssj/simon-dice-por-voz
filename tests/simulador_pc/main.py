@@ -194,6 +194,12 @@ def _on_cliente_conectado():
 
 def _on_comando_panel(cmd: str):
     """Comando reconocido por Whisper WASM en el browser."""
+    # El browser avisa que Whisper empezó a procesar — pausar el timer del turno
+    if cmd == "WHISPER_PROCESANDO":
+        juego.pausar_timeout()
+        return
+    # Cualquier resultado de Whisper (color, DESCONOCIDO, etc.) reanuda el timer
+    juego.reanudar_timeout()
     log(f"[Panel] Comando: {cmd}", "voz")
     ws.enviar_log(f"Comando recibido: {cmd}")
     juego.procesar_comando(cmd)
