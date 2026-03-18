@@ -57,6 +57,9 @@ const ESTADO_INICIAL: EstadoCliente = {
   ultimoResultado:       null,
   whisperCargado:        false,
   whisperTranscribiendo: false,
+  dispositivoMic:        null,
+  dispositivoSpeaker:    null,
+  whisperModelo:         null,
   log:                   [],
 };
 
@@ -216,14 +219,6 @@ export function useWebSocket() {
     };
   }, [estadoJuego.conectado, finalizarPTTExterior]); // eslint-disable-line
 
-  // ---- Cargar WASM solo cuando se confirma que Python no tiene Whisper ----
-
-  useEffect(() => {
-    if (estadoJuego.conectado && !whisperLocalActivo) {
-      whisper.cargar();
-    }
-  }, [estadoJuego.conectado, whisperLocalActivo]); // eslint-disable-line
-
   // ---- Procesar mensajes del servidor ----
 
   const procesarMensaje = useCallback(
@@ -233,12 +228,29 @@ export function useWebSocket() {
 
         switch (msg.tipo) {
           case "ready": {
-            const disponible = (msg as MensajeWS & { whisperDisponible?: boolean }).whisperDisponible === true;
+            const rm = msg as MensajeWS & {
+              whisperDisponible?: boolean;
+              whisperModelo?: string;
+              dispositivoMic?: string;
+              dispositivoSpeaker?: string;
+            };
+            const disponible = rm.whisperDisponible === true;
             whisperDisponibleRef.current = disponible;
             setWhisperLocalActivo(disponible);
+
+            // Solo cargar WASM si Python no tiene Whisper — y justo aquí,
+            // no antes (evita race condition con el effect de conectado).
+            if (!disponible) whisper.cargar();
+
+            siguiente.dispositivoMic     = rm.dispositivoMic     ?? null;
+            siguiente.dispositivoSpeaker = rm.dispositivoSpeaker ?? null;
+            siguiente.whisperModelo      = disponible
+              ? (rm.whisperModelo ?? "local")
+              : "tiny (navegador)";
+
             agregarLog(
               disponible
-                ? "Simulador listo — Whisper local activo (mic del sistema)"
+                ? `Simulador listo — Whisper local activo (modelo: ${rm.whisperModelo ?? "local"})`
                 : "Simulador listo — usando Whisper del navegador",
               "sistema"
             );
@@ -369,7 +381,13 @@ export function useWebSocket() {
       escuchandoRef.current        = false;
       whisperDisponibleRef.current = false;
       setWhisperLocalActivo(false);
-      setEstadoJuego((prev) => ({ ...prev, conectado: false }));
+      setEstadoJuego((prev) => ({
+        ...prev,
+        conectado:        false,
+        dispositivoMic:   null,
+        dispositivoSpeaker: null,
+        whisperModelo:    null,
+      }));
       agregarLog("Conexión cerrada", "sistema");
       ws.current = null;
     };

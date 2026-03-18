@@ -39,6 +39,9 @@ export default function Home() {
   const finalizarPTT            = activo.finalizarPTT;
   const puedoHablar             = activo.puedoHablar ?? false;
   const whisperLocalActivo      = (activo as typeof ws).whisperLocalActivo ?? false;
+  const dispositivoMic          = estadoJuego.dispositivoMic ?? null;
+  const dispositivoSpeaker      = estadoJuego.dispositivoSpeaker ?? null;
+  const whisperModelo           = estadoJuego.whisperModelo ?? null;
 
   const handleConectar    = useCallback(() => activo.conectar(),    [activo]);
   const handleDesconectar = useCallback(() => activo.desconectar(), [activo]);
@@ -131,6 +134,9 @@ export default function Home() {
             iniciarPTT={iniciarPTT}
             finalizarPTT={finalizarPTT}
             whisperLocalActivo={whisperLocalActivo}
+            dispositivoMic={dispositivoMic}
+            dispositivoSpeaker={dispositivoSpeaker}
+            whisperModelo={whisperModelo}
             onReiniciar={handleReiniciar}
             whisperTiempoRestante={whisperTiempoRestante}
           />

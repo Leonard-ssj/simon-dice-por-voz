@@ -293,7 +293,7 @@ def main():
     ws.cargar_whisper()
 
     ws.iniciar()
-    ws.enviar_ready()
+    # READY se envía por cliente en ws_server._manejar_cliente (no aquí)
 
     _registrar_callbacks()
     juego.iniciar()

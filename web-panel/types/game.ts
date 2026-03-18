@@ -46,6 +46,9 @@ export interface EstadoCliente {
   ultimoResultado: ResultadoTurno | null;
   whisperCargado: boolean;               // modelo Whisper listo en el browser
   whisperTranscribiendo: boolean;        // grabando/procesando audio ahora mismo
+  dispositivoMic: string | null;         // nombre del micrófono activo
+  dispositivoSpeaker: string | null;     // nombre del altavoz activo
+  whisperModelo: string | null;          // modelo Whisper que se está usando
   log: EntradaLog[];
 }
 

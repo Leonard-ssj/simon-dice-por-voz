@@ -34,6 +34,9 @@ const ESTADO_INICIAL: EstadoCliente = {
   ultimoResultado:      null,
   whisperCargado:       false,
   whisperTranscribiendo: false,
+  dispositivoMic:       null,
+  dispositivoSpeaker:   null,
+  whisperModelo:        null,
   log:                  [],
 };
 

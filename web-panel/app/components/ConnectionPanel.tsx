@@ -1,6 +1,6 @@
 "use client";
 
-import { Wifi, WifiOff, Usb, Radio, Loader2, Mic } from "lucide-react";
+import { Wifi, WifiOff, Usb, Radio, Loader2, Mic, Volume2, Cpu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -26,6 +26,9 @@ interface Props {
   iniciarPTT?: () => void;         // iniciar grabación PTT
   finalizarPTT?: () => void;       // finalizar grabación PTT
   whisperLocalActivo?: boolean;    // Whisper corre en Python local (no en browser)
+  dispositivoMic?: string | null;      // nombre del micrófono activo
+  dispositivoSpeaker?: string | null;  // nombre del altavoz activo
+  whisperModelo?: string | null;       // modelo Whisper en uso
   onReiniciar?: () => void;        // callback para reiniciar el juego
 }
 
@@ -49,6 +52,9 @@ export default function ConnectionPanel({
   iniciarPTT,
   finalizarPTT,
   whisperLocalActivo = false,
+  dispositivoMic = null,
+  dispositivoSpeaker = null,
+  whisperModelo = null,
   onReiniciar,
 }: Props) {
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
@@ -231,6 +237,36 @@ export default function ConnectionPanel({
           <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
         )}
       </div>
+
+      {/* Info de dispositivos — visible solo cuando conectado */}
+      {conectado && (dispositivoMic || dispositivoSpeaker || whisperModelo) && (
+        <div className="basis-full flex items-center gap-4 flex-wrap pt-1 border-t border-white/5 text-xs">
+          {dispositivoMic && (
+            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+              <Mic size={10} />
+              {dispositivoMic}
+            </span>
+          )}
+          {!dispositivoMic && !whisperLocalActivo && (
+            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+              <Mic size={10} />
+              Micrófono del navegador
+            </span>
+          )}
+          {dispositivoSpeaker && (
+            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+              <Volume2 size={10} />
+              {dispositivoSpeaker}
+            </span>
+          )}
+          {whisperModelo && (
+            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+              <Cpu size={10} />
+              Whisper {whisperModelo}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Botón conectar/desconectar */}
       <Button

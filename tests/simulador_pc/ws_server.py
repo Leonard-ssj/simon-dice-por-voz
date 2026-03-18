@@ -167,11 +167,42 @@ class ServidorWS:
             self._listo.set()
             await self._broadcast_loop()
 
+    async def _enviar_ready_a_cliente(self, websocket):
+        """Envía READY con info de dispositivos directamente al cliente recién conectado."""
+        try:
+            import sounddevice as sd
+            mic_info = sd.query_devices(kind="input")
+            mic_nombre = mic_info["name"][:50] if isinstance(mic_info, dict) else "predeterminado"
+        except Exception:
+            mic_nombre = "predeterminado"
+
+        try:
+            import sounddevice as sd
+            speaker_info = sd.query_devices(kind="output")
+            speaker_nombre = speaker_info["name"][:50] if isinstance(speaker_info, dict) else "predeterminado"
+        except Exception:
+            speaker_nombre = "predeterminado"
+
+        msg = {
+            "tipo":              "ready",
+            "raw":               "READY",
+            "whisperDisponible": self._whisper_disponible,
+            "whisperModelo":     WHISPER_MODEL if self._whisper_disponible else None,
+            "dispositivoMic":    mic_nombre if self._whisper_disponible else None,
+            "dispositivoSpeaker": speaker_nombre,
+            "ts":                int(time.time() * 1000),
+        }
+        await websocket.send(json.dumps(msg, ensure_ascii=False))
+
     async def _manejar_cliente(self, websocket):
         path = getattr(websocket, "path", "/")
         self._clientes.add(websocket)
         if DEBUG:
             print(f"[WS] Cliente conectado ({path}). Total: {len(self._clientes)}")
+
+        # Enviar READY directamente a este cliente (no via cola — evita el problema
+        # de que enviar_ready() se llame antes de que haya clientes conectados).
+        await self._enviar_ready_a_cliente(websocket)
 
         if self.on_cliente_conectado:
             threading.Thread(
