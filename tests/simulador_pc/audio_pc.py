@@ -74,8 +74,9 @@ FRECUENCIAS_ESPECIALES = {
 
 _tts_queue: queue.Queue = queue.Queue()
 _tts_listo  = threading.Event()
-_voz_nombre   = ""    # nombre de la voz SAPI en español
-_usar_edge    = False  # True cuando edge-tts + pygame están listos
+_voz_nombre   = ""     # nombre de la voz SAPI en español (siempre se detecta para fallback)
+_usar_edge    = False   # True cuando edge-tts + pygame están listos
+_edge_loop: "asyncio.AbstractEventLoop | None" = None  # loop persistente del hilo TTS
 
 
 def _detectar_voz_espanol() -> str:
@@ -202,10 +203,15 @@ def _hablar_edge(texto: str) -> None:
     """
     Habla usando Microsoft Edge TTS Neural (es-MX-DaliaNeural).
     Requiere internet. Bloquea hasta que termina.
+    Reutiliza el mismo event loop del hilo TTS para evitar el error
+    "Event loop is closed" de asyncio.ProactorBasePipeTransport en Windows.
     Si falla, usa PowerShell SAPI como fallback.
     """
+    global _edge_loop
     try:
-        mp3_data = asyncio.run(_edge_generar_mp3(texto))
+        if _edge_loop is None or _edge_loop.is_closed():
+            _edge_loop = asyncio.new_event_loop()
+        mp3_data = _edge_loop.run_until_complete(_edge_generar_mp3(texto))
         mp3_io = io.BytesIO(mp3_data)
         _pygame_mod.mixer.music.load(mp3_io, "mp3")
         _pygame_mod.mixer.music.play()
@@ -219,21 +225,25 @@ def _hablar_edge(texto: str) -> None:
 
 def _tts_worker():
     """Hilo dedicado. Inicializa TTS y procesa la cola de frases."""
-    global _voz_nombre, _usar_edge
+    global _voz_nombre, _usar_edge, _edge_loop
+
+    # Siempre detectar voz SAPI — se usa como fallback cuando edge-tts falla
+    _voz_nombre = _detectar_voz_espanol()
 
     # Intentar activar edge-tts + pygame (voz neural mexicana)
     if _EDGE_TTS_DISPONIBLE and _PYGAME_DISPONIBLE:
         try:
             _pygame_mod.mixer.init()
+            # Crear el loop persistente aquí — se reutiliza en cada llamada a _hablar_edge
+            # para evitar el error "Event loop is closed" de ProactorBasePipeTransport
+            _edge_loop = asyncio.new_event_loop()
             _usar_edge = True
             print(f"[TTS] Edge TTS activo — voz neural: {EDGE_TTS_VOZ}")
         except Exception as e:
-            print(f"[TTS] pygame init falló ({e}), usando SAPI")
-
-    if not _usar_edge:
+            print(f"[TTS] pygame/edge init falló ({e}), usando SAPI")
+    else:
         if not _EDGE_TTS_DISPONIBLE:
-            print("[TTS] edge-tts no instalado — ejecuta: pip install edge-tts pygame")
-        _voz_nombre = _detectar_voz_espanol()
+            print("[TTS] Instala 'edge-tts' y 'pygame' para voz neural mexicana")
 
     _tts_listo.set()
 

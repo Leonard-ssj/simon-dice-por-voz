@@ -88,7 +88,7 @@ def _on_estado(estado: Estado):
         decir("Mira y escucha.", bloquear=False)
 
     elif estado == Estado.LISTENING:
-        decir("Tu turno.", bloquear=False)
+        decir("Tu turno. Presiona el botón para hablar.", bloquear=False)
 
     elif estado == Estado.EVALUATING:
         log("Procesando respuesta...", "info")

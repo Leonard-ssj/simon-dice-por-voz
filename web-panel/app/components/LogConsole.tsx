@@ -47,10 +47,10 @@ export default function LogConsole({ log, dark, onClear }: Props) {
 
   const logFiltrado = filtro === "todos" ? log : log.filter((e) => e.tipo === filtro);
 
-  // Auto-scroll al nuevo mensaje
+  // Auto-scroll al nuevo mensaje — scrollTop directo para que sea inmediato
   useEffect(() => {
-    if (autoScroll) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (autoScroll && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [log.length, autoScroll]);
 
