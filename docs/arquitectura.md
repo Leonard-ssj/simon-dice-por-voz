@@ -277,6 +277,24 @@ stateDiagram-v2
 
 ***
 
+## Componentes UI — Web Panel
+
+El dashboard principal (`page.tsx`) ensambla los siguientes componentes:
+
+| Componente          | Descripción                                                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **ConnectionPanel** | Toggle de modo (WebSocket / Serial), botón PTT con indicador de estado, información del dispositivo detectado, botón conectar |
+| **LEDPanel**        | Visualización de los 4 LEDs de colores (Rojo, Verde, Azul, Amarillo) que refleja el estado de los LEDs físicos o simulados  |
+| **GameStatus**      | Badge del estado actual del juego, última detección de voz, y pista de uso del PTT                                          |
+| **ScoreBoard**      | Nivel y puntuación actuales con animación de números al actualizarse                                                         |
+| **SequenceDisplay** | Secuencia de pasos compacta (cajas de color w-6 h-6), muestra la secuencia completa del nivel actual                        |
+| **LogConsole**      | Log en tiempo real de todos los eventos, los más nuevos al fondo con auto-scroll, filtrable por tipo de mensaje              |
+| **TurnoTimer**      | Cuenta regresiva de 30 s durante el estado LISTENING (comienza después del retraso TTS de 3,5 s); muestra referencia de comandos de voz cuando está en reposo |
+| **SesionStats**     | Estadísticas de la sesión actual: mejor nivel, mejor puntuación, total de partidas y mejor racha, persistidas en memoria     |
+| **HowToPlay**       | Modal de ayuda con instrucciones del juego, lista de comandos de voz reconocidos y notas de compatibilidad del navegador     |
+
+***
+
 ## Estructura de carpetas
 
 ```
@@ -306,7 +324,8 @@ sistemas-inteligentes/
 │   ├── app/
 │   │   ├── page.tsx       dashboard principal
 │   │   └── components/    GameStatus, LEDPanel, SequenceDisplay,
-│   │                      LogConsole, ScoreBoard, ConnectionPanel, HowToPlay
+│   │                      LogConsole, ScoreBoard, ConnectionPanel,
+│   │                      TurnoTimer, SesionStats, HowToPlay
 │   ├── hooks/
 │   │   ├── useWebSocket.ts    modo simulador
 │   │   ├── useWebSerial.ts    modo ESP32
