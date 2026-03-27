@@ -21,8 +21,8 @@
 // Periférico I2S del micrófono
 #define I2S_NUM_MIC      I2S_NUM_0
 
-// Pines I2S del INMP441 ⚠️ VERIFICAR con el kit físico MRD085A
-#define I2S_SCK_PIN      12    // BCLK (bit clock)   ⚠️ VERIFICAR
+// Pines I2S del INMP441 ⚠️ VERIFICAR con el esquemático del kit OKYN-G5806
+#define I2S_SCK_PIN      12    // BCLK (bit clock)    ⚠️ VERIFICAR
 #define I2S_WS_PIN       13    // LRCLK (word select) ⚠️ VERIFICAR
 #define I2S_SD_PIN       11    // DOUT del micrófono  ⚠️ VERIFICAR
 
@@ -31,9 +31,10 @@
 #define BITS_PER_SAMPLE  16      // bits por muestra
 #define BUFFER_SIZE      512     // muestras por lectura DMA
 
-// Buffer PTT en PSRAM — máximo 10 segundos de audio
-#define AUDIO_PTT_MAX_MUESTRAS   (SAMPLE_RATE * 10)   // 160 000 muestras
-#define AUDIO_PTT_MAX_BYTES      (AUDIO_PTT_MAX_MUESTRAS * 2)  // 320 000 bytes
+// Buffer PTT en PSRAM — máximo 5 segundos de audio
+// El N8R2 tiene 2MB PSRAM. 5s = 160 000 bytes (156 KB), cabe con margen.
+#define AUDIO_PTT_MAX_MUESTRAS   (SAMPLE_RATE * 5)             // 80 000 muestras
+#define AUDIO_PTT_MAX_BYTES      (AUDIO_PTT_MAX_MUESTRAS * 2)  // 160 000 bytes
 
 // Umbral VAD básico (amplitud mínima para detectar voz en modo stream)
 #define VAD_UMBRAL       500

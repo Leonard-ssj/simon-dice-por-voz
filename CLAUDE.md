@@ -142,11 +142,14 @@ GAMEOVER                       fin del juego
 
 ## Hardware
 
-### Kit MRD085A
-- ESP32-S3 (512KB SRAM + 8MB PSRAM, 240MHz, aceleración vectorial para IA)
-- Micrófono: INMP441 I2S digital (SNR 61dB, 16kHz, 16-bit, mono)
-- Speaker: amplificador MAX98357A + altavoz pasivo
+### Kit OKYN-G5806 (marca OKYSTAR)
+- Chip: ESP32-S3-**N8R2** (8MB Flash, **2MB PSRAM** Quad-SPI, 240MHz, aceleración vectorial ESP-NN)
+- Micrófono: INMP441 I2S digital (SNR 61dB, 16kHz, 16-bit, mono) — integrado en el kit
+- Speaker: amplificador MAX98357A + altavoz pasivo — integrado en el kit
+- Pantalla: OLED SSD1306 0.91" (128×32 px) — integrado en el kit
+- Botones SW1 (Volumen+) y SW2 (Volumen-) — usados como PTT
 - WiFi integrado (no usado en este proyecto)
+- Dimensiones: 50mm × 40mm
 
 ### LEDs del juego
 - **No hay LEDs físicos** — los colores se muestran en el Web Panel (componente LEDPanel)

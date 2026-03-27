@@ -40,7 +40,7 @@ static int _base64Line(const uint8_t* src, int len, char* dst) {
 // ---- Inicialización ----
 
 void audioInicializar() {
-    // Asignar buffer en PSRAM (8 MB disponibles en ESP32-S3-N16R8)
+    // Asignar buffer en PSRAM (2 MB disponibles en ESP32-S3-N8R2)
     _pttBuffer = (int16_t*) ps_malloc(AUDIO_PTT_MAX_BYTES);
     if (!_pttBuffer) {
         // Sin PSRAM disponible: sin captura PTT (logs por Serial)
