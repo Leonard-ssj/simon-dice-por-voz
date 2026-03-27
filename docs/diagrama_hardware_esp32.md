@@ -1,7 +1,8 @@
 # Diagrama de Hardware — Kit MRD085A
 
 > Conexiones físicas del kit MRD085A (ESP32-S3-N16R8).
-> El chip ESP32-S3 se comunica con todos los periféricos integrados y externos.
+> El chip ESP32-S3 se comunica con todos los periféricos integrados.
+> **No hay LEDs físicos** — los colores del juego se muestran en el Web Panel (LEDPanel).
 > Los pines marcados con ⚠️ deben verificarse contra el esquemático físico del kit.
 
 ---
@@ -38,11 +39,8 @@ flowchart TD
         SW2(["SW2 Volumen-\nPTT Alternativo\nGPIO35 · Pull-up interno"])
     end
 
-    subgraph GPIO_LED ["LEDs DE JUEGO — GPIO Salida"]
-        LED_R(["LED ROJO\nGPIO15 · 220 Ohm"])
-        LED_G(["LED VERDE\nGPIO16 · 220 Ohm"])
-        LED_B(["LED AZUL\nGPIO17 · 220 Ohm"])
-        LED_Y(["LED AMARILLO\nGPIO18 · 220 Ohm"])
+    subgraph VIRTUAL_LED ["LEDs VIRTUALES — Web Panel solamente"]
+        LED_V(["LEDPanel — Next.js\nRojo · Verde · Azul · Amarillo\nRecibe: LED:ROJO / LED:OFF por Serial"])
     end
 
     subgraph USB_SER ["PROTOCOLO SERIAL — USB · 921600 baud"]
@@ -90,11 +88,8 @@ flowchart TD
     SW1 -->|"GPIO0 flanco bajada"| CHIP
     SW2 -->|"GPIO35 flanco bajada"| CHIP
 
-    %% Conexiones ESP32 — LEDs
-    CHIP -->|"GPIO15 HIGH/LOW"| LED_R
-    CHIP -->|"GPIO16 HIGH/LOW"| LED_G
-    CHIP -->|"GPIO17 HIGH/LOW"| LED_B
-    CHIP -->|"GPIO18 HIGH/LOW"| LED_Y
+    %% LEDs virtuales via Serial
+    CHIP -->|"LED:ROJO / LED:OFF por Serial"| LED_V
 
     %% Serial
     CHIP -->|"texto plano READY STATE DETECTED etc"| USB_HW
@@ -122,11 +117,11 @@ flowchart TD
     classDef chip fill:#0f2d4a,stroke:#4a9eff,color:#fff
 
     class CHIP chip
-    class MIC,AMP,SPK,SW1,SW2,LED_R,LED_G,LED_B,LED_Y,USB_HW hardware
+    class MIC,AMP,SPK,SW1,SW2,USB_HW hardware
     class MIC_SCK,MIC_WS,MIC_SD,SPK_BCLK,SPK_WS,SPK_DIN,SPK_SD i2s
     class OLED_SDA,OLED_SCL gpio
     class OLED i2s
-    class WEB_SER,WEB_PANEL,WEB_WS browser
+    class LED_V,WEB_SER,WEB_PANEL,WEB_WS browser
     class SRV_WS,SRV_WHISPER,SRV_VAL software
 ```
 
@@ -143,10 +138,7 @@ flowchart TD
 | Pantalla OLED | SSD1306 0.91" | I2C | SDA=21, SCL=22 | 128×32 px, monocromático |
 | Botón SW1 | Pulsador | GPIO | GPIO0 | Volumen+, PTT principal, pull-up |
 | Botón SW2 | Pulsador | GPIO | GPIO35 | Volumen-, PTT alternativo, pull-up |
-| LED Rojo | LED 5mm | GPIO | GPIO15 | Resistencia 220Ω |
-| LED Verde | LED 5mm | GPIO | GPIO16 | Resistencia 220Ω |
-| LED Azul | LED 5mm | GPIO | GPIO17 | Resistencia 220Ω |
-| LED Amarillo | LED 5mm | GPIO | GPIO18 | Resistencia 220Ω |
+| LEDs del juego | *(virtuales)* | Serial | — | Solo en Web Panel — `LED:ROJO` / `LED:OFF` por Serial |
 | USB Serial | Integrado | USB | — | 921600 baud, cable de flasheo |
 
 ---
@@ -169,7 +161,4 @@ flowchart TD
 | GPIO22 | OLED SCL (I2C clock) | ⚠️ VERIFICAR con esquemático |
 | GPIO0 | SW1 Volumen+ (PTT principal) | ⚠️ VERIFICAR con esquemático |
 | GPIO35 | SW2 Volumen- (PTT alternativo) | ⚠️ VERIFICAR con esquemático |
-| GPIO15 | LED Rojo | ⚠️ VERIFICAR con esquemático |
-| GPIO16 | LED Verde | ⚠️ VERIFICAR con esquemático |
-| GPIO17 | LED Azul | ⚠️ VERIFICAR con esquemático |
-| GPIO18 | LED Amarillo | ⚠️ VERIFICAR con esquemático |
+| GPIO15-18 | *(sin uso — no hay LEDs físicos)* | Los LEDs son virtuales en el Web Panel |

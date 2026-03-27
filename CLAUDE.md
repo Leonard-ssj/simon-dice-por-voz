@@ -3,7 +3,7 @@
 ## Contexto del proyecto
 Proyecto universitario de la materia **Sistemas Inteligentes**.
 Juego físico Simon Dice controlado completamente por voz en **español**.
-Hardware principal: Kit **OKYN-G5806** (ESP32-S3 con micrófono INMP441, speaker MAX98357A integrados).
+Hardware principal: Kit **MRD085A** (ESP32-S3 con micrófono INMP441, speaker MAX98357A integrados).
 IDE: **Antigravity**
 Tiempo disponible: **1 mes** (Fase 1 en 2 semanas, Fase 2 + Web Panel las 2 restantes)
 
@@ -142,31 +142,33 @@ GAMEOVER                       fin del juego
 
 ## Hardware
 
-### Kit OKYN-G5806
+### Kit MRD085A
 - ESP32-S3 (512KB SRAM + 8MB PSRAM, 240MHz, aceleración vectorial para IA)
 - Micrófono: INMP441 I2S digital (SNR 61dB, 16kHz, 16-bit, mono)
 - Speaker: amplificador MAX98357A + altavoz pasivo
 - WiFi integrado (no usado en este proyecto)
 
-### Componentes adicionales
-- 4 LEDs: ROJO, VERDE, AZUL, AMARILLO
-- 4 resistencias 220Ω (una por LED)
-- Protoboard + cables jumper
+### LEDs del juego
+- **No hay LEDs físicos** — los colores se muestran en el Web Panel (componente LEDPanel)
+- El firmware envía mensajes `LED:ROJO`, `LED:OFF` por Serial para actualizar el panel
 
-### Pines (verificar con el kit físico)
+### Pines integrados en el kit MRD085A (⚠️ verificar con esquemático)
 ```
-LED ROJO     → GPIO definir al obtener el kit
-LED VERDE    → GPIO definir al obtener el kit
-LED AZUL     → GPIO definir al obtener el kit
-LED AMARILLO → GPIO definir al obtener el kit
-INMP441 SCK  → integrado en kit
-INMP441 WS   → integrado en kit
-INMP441 SD   → integrado en kit
-MAX98357A    → integrado en kit
-USB Serial   → cable de flasheo
+INMP441 SCK  → ⚠️ verificar (estimado GPIO12)
+INMP441 WS   → ⚠️ verificar (estimado GPIO13)
+INMP441 SD   → ⚠️ verificar (estimado GPIO11)
+MAX98357A BCLK → ⚠️ verificar (estimado GPIO5)
+MAX98357A WS   → ⚠️ verificar (estimado GPIO4)
+MAX98357A DIN  → ⚠️ verificar (estimado GPIO6)
+MAX98357A SD   → ⚠️ verificar (estimado GPIO7)
+OLED SDA     → ⚠️ verificar (estimado GPIO21)
+OLED SCL     → ⚠️ verificar (estimado GPIO22)
+SW1 Volumen+ → ⚠️ verificar (estimado GPIO0)
+SW2 Volumen- → ⚠️ verificar (estimado GPIO35)
+USB Serial   → cable de flasheo — 921600 baud
 ```
 
-> IMPORTANTE: Verificar pinout exacto del kit OKYN-G5806 antes de escribir código de hardware.
+> IMPORTANTE: Todos los pines GPIO son estimaciones. Verificar con el esquemático del kit MRD085A antes de compilar.
 
 ---
 

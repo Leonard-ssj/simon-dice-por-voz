@@ -218,13 +218,13 @@ flowchart LR
     WASM2 -->|"texto transcrito"| VAL2 -->|"ROJO / VERDE..."| WS2
     WS_VZ -->|"voz:{comando}"| WS2
   end
-  subgraph KIT["Kit MRD085A"]
+  subgraph KIT["Kit MRD085A (sin LEDs físicos)"]
     FW2["simon_dice.ino"]
     GM["game_engine.cpp"]
-    LC["led_control.cpp"]
-    SC["sound_control.cpp"]
-    BT["botones.cpp\n(SW1/SW2)"]
-    OL["oled_display.cpp\n(SSD1306)"]
+    LC["led_control.cpp\nLEDs virtuales via Serial"]
+    SC["sound_control.cpp\nI2S MAX98357A"]
+    BT["botones.cpp\nSW1/SW2 PTT"]
+    OL["oled_display.cpp\nSSD1306 OLED"]
     FW2 --> GM --> LC & SC & OL
     BT --> FW2
   end

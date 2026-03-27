@@ -1,51 +1,51 @@
 #include "led_control.h"
+#include "serial_comm.h"
 #include <Arduino.h>
 
 // ============================================================
-// led_control.cpp — Implementación del control de LEDs
+// led_control.cpp — LEDs virtuales via Serial
+//
+// No hay LEDs físicos. Cada llamada envía un mensaje Serial
+// para que el Web Panel (LEDPanel) actualice el color visual.
+//   ledEncender(CMD_ROJO)  → Serial: "LED:ROJO\n"
+//   ledsApagar()           → Serial: "LED:OFF\n"
 // ============================================================
 
-// Mapeo de color a pin GPIO
-static int _pinDeColor(Comando color) {
+static const char* _colorNombre(Comando color) {
     switch (color) {
-        case CMD_ROJO:     return PIN_LED_ROJO;
-        case CMD_VERDE:    return PIN_LED_VERDE;
-        case CMD_AZUL:     return PIN_LED_AZUL;
-        case CMD_AMARILLO: return PIN_LED_AMARILLO;
-        default:           return -1;
+        case CMD_ROJO:     return "ROJO";
+        case CMD_VERDE:    return "VERDE";
+        case CMD_AZUL:     return "AZUL";
+        case CMD_AMARILLO: return "AMARILLO";
+        default:           return "OFF";
     }
 }
 
 void ledInicializar() {
-    pinMode(PIN_LED_ROJO,      OUTPUT);
-    pinMode(PIN_LED_VERDE,     OUTPUT);
-    pinMode(PIN_LED_AZUL,      OUTPUT);
-    pinMode(PIN_LED_AMARILLO,  OUTPUT);
+    // Sin GPIO — los LEDs son virtuales en el Web Panel
     ledsApagar();
 }
 
 void ledEncender(Comando color) {
-    int pin = _pinDeColor(color);
-    if (pin >= 0) digitalWrite(pin, HIGH);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "LED:%s", _colorNombre(color));
+    serialEnviar(buf);
 }
 
 void ledApagar(Comando color) {
-    int pin = _pinDeColor(color);
-    if (pin >= 0) digitalWrite(pin, LOW);
+    (void)color;
+    serialEnviar("LED:OFF");
 }
 
 void ledsApagar() {
-    digitalWrite(PIN_LED_ROJO,     LOW);
-    digitalWrite(PIN_LED_VERDE,    LOW);
-    digitalWrite(PIN_LED_AZUL,     LOW);
-    digitalWrite(PIN_LED_AMARILLO, LOW);
+    serialEnviar("LED:OFF");
 }
 
 void ledParpadear(Comando color, int veces, int duracionMs) {
     for (int i = 0; i < veces; i++) {
         ledEncender(color);
         delay(duracionMs);
-        ledApagar(color);
+        ledsApagar();
         delay(duracionMs);
     }
 }
@@ -55,19 +55,24 @@ void ledEfectoInicio() {
     for (int i = 0; i < 4; i++) {
         ledEncender(orden[i]);
         delay(150);
-        ledApagar(orden[i]);
+        ledsApagar();
         delay(50);
     }
-    // Todos juntos
-    for (int i = 0; i < 4; i++) ledEncender(orden[i]);
-    delay(400);
+    // Todos juntos en secuencia rápida
+    for (int i = 0; i < 4; i++) {
+        ledEncender(orden[i]);
+        delay(100);
+    }
+    delay(300);
     ledsApagar();
 }
 
 void ledEfectoGameOver() {
     for (int r = 0; r < 3; r++) {
-        for (int i = 0; i < 4; i++) ledEncender(COLORES_VALIDOS[i]);
-        delay(150);
+        for (int i = 0; i < 4; i++) {
+            ledEncender(COLORES_VALIDOS[i]);
+            delay(60);
+        }
         ledsApagar();
         delay(150);
     }

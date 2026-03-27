@@ -3,17 +3,15 @@
 #include "vocabulario.h"
 
 // ============================================================
-// led_control.h — Control de los 4 LEDs del juego
-// IMPORTANTE: Verificar pines con el kit físico OKYN-G5806
+// led_control.h — LEDs virtuales del juego
+//
+// No hay LEDs físicos en el kit MRD085A.
+// Los LEDs se visualizan únicamente en el Web Panel (LEDPanel).
+// Estas funciones envían mensajes Serial (LED:ROJO, LED:OFF)
+// para que el browser actualice el panel visual.
 // ============================================================
 
-// Pines GPIO — ajustar según el kit físico
-#define PIN_LED_ROJO      15
-#define PIN_LED_VERDE     16
-#define PIN_LED_AZUL      17
-#define PIN_LED_AMARILLO  18
-
-// Inicializa los pines de los LEDs
+// Inicializa los LEDs (sin GPIO — solo inicialización lógica)
 void ledInicializar();
 
 // Enciende el LED correspondiente al color
