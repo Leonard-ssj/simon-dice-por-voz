@@ -55,10 +55,22 @@ private:
     unsigned long _tiempoInicio;
     bool _pausado;
 
+    void pausarTimeout();          // congela el timer mientras el browser transcribe
+    void reanudarTimeout();        // reanuda el timer
+
     void _generarSecuencia();
     void _agregarColor();
     void _cambiarEstado(EstadoJuego nuevo);
     void _actualizarShowing();
     void _actualizarListening();
     bool _timeoutVencido() const;
+
+    // estado de la animación de secuencia (antes eran static locales)
+    unsigned long _showingUltimoTiempo;
+    int           _showingFase;
+
+    // pausa de timeout durante transcripción PTT
+    bool          _enPausaTimeout;
+    unsigned long _tiempoPausadoMs;
+    unsigned long _tiempoPausadoInicio;
 };

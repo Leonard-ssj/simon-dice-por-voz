@@ -1,0 +1,4 @@
+sounddevice     # captura de micrófono del sistema
+numpy           # procesamiento de audio PCM
+websockets      # servidor WebSocket
+openai-whisper  # reconocimiento de voz local

@@ -15,7 +15,12 @@ GameEngine::GameEngine()
       _nivel(NIVEL_INICIAL),
       _puntuacion(0),
       _tiempoInicio(0),
-      _pausado(false) {}
+      _pausado(false),
+      _showingUltimoTiempo(0),
+      _showingFase(0),
+      _enPausaTimeout(false),
+      _tiempoPausadoMs(0),
+      _tiempoPausadoInicio(0) {}
 
 void GameEngine::iniciar() {
     reiniciar();
@@ -81,6 +86,7 @@ void GameEngine::procesarComando(Comando cmd) {
                     if (_posicionEscuchar >= _longitudSecuencia) {
                         // Completó la secuencia completa
                         _puntuacion += _nivel * 10;
+                        serialEnviarResultado("CORRECT");
                         _cambiarEstado(ESTADO_CORRECT);
                         sonidoCorrecto();
                         delay(500);
@@ -90,11 +96,17 @@ void GameEngine::procesarComando(Comando cmd) {
                         _agregarColor();
                         _posicionMostrar  = 0;
                         _posicionEscuchar = 0;
+                        serialEnviarNivel(_nivel);
+                        _cambiarEstado(ESTADO_LEVEL_UP);
+                        sonidoNuevoNivel(_nivel);
+                        delay(300);
                         _cambiarEstado(ESTADO_SHOWING_SEQUENCE);
                     } else {
                         // Parcialmente correcto, sigue escuchando
+                        serialEnviarResultado("CORRECT");
                         serialEnviarEsperado(_secuencia[_posicionEscuchar]);
-                        _tiempoInicio = millis();
+                        _tiempoInicio    = millis();
+                        _tiempoPausadoMs = 0;
                         _cambiarEstado(ESTADO_LISTENING);
                     }
                 } else {
@@ -146,53 +158,55 @@ void GameEngine::_cambiarEstado(EstadoJuego nuevo) {
     serialEnviarEstado(nuevo);
 
     if (nuevo == ESTADO_SHOWING_SEQUENCE) {
-        _posicionMostrar = 0;
+        _posicionMostrar     = 0;
+        _showingUltimoTiempo = 0;
+        _showingFase         = 0;
         serialEnviarSecuencia(_secuencia, _longitudSecuencia);
     }
     if (nuevo == ESTADO_LISTENING) {
-        _tiempoInicio = millis();
+        _tiempoInicio    = millis();
+        _tiempoPausadoMs = 0;
+        _enPausaTimeout  = false;
         serialEnviarEsperado(_secuencia[_posicionEscuchar]);
         serialEnviarNivel(_nivel);
         serialEnviarPuntuacion(_puntuacion);
     }
     if (nuevo == ESTADO_GAME_OVER) {
-        ledsApagar();
+        sonidoGameOver();
+        ledEfectoGameOver();
         serialEnviarGameOver();
         serialEnviarPuntuacion(_puntuacion);
     }
 }
 
 void GameEngine::_actualizarShowing() {
-    static unsigned long ultimoTiempo = 0;
-    static int fase = 0; // 0 = LED encendido, 1 = pausa
-
     unsigned long ahora = millis();
 
-    if (fase == 0) {
-        if (_posicionMostrar == 0 && ultimoTiempo == 0) {
+    if (_showingFase == 0) {
+        if (_posicionMostrar == 0 && _showingUltimoTiempo == 0) {
             // Primer LED
             ledEncender(_secuencia[_posicionMostrar]);
             sonidoColor(_secuencia[_posicionMostrar]);
-            ultimoTiempo = ahora;
-        } else if (ahora - ultimoTiempo >= DURACION_LED) {
+            _showingUltimoTiempo = ahora;
+        } else if (ahora - _showingUltimoTiempo >= DURACION_LED) {
             ledApagar(_secuencia[_posicionMostrar]);
-            ultimoTiempo = ahora;
-            fase = 1;
+            _showingUltimoTiempo = ahora;
+            _showingFase = 1;
         }
     } else {
-        if (ahora - ultimoTiempo >= PAUSA_ENTRE_LEDS) {
+        if (ahora - _showingUltimoTiempo >= PAUSA_ENTRE_LEDS) {
             _posicionMostrar++;
             if (_posicionMostrar >= _longitudSecuencia) {
                 // Terminó de mostrar la secuencia
-                ultimoTiempo = 0;
-                fase = 0;
+                _showingUltimoTiempo = 0;
+                _showingFase = 0;
                 _posicionEscuchar = 0;
                 _cambiarEstado(ESTADO_LISTENING);
             } else {
                 ledEncender(_secuencia[_posicionMostrar]);
                 sonidoColor(_secuencia[_posicionMostrar]);
-                ultimoTiempo = ahora;
-                fase = 0;
+                _showingUltimoTiempo = ahora;
+                _showingFase = 0;
             }
         }
     }
@@ -207,7 +221,22 @@ void GameEngine::_actualizarListening() {
 }
 
 bool GameEngine::_timeoutVencido() const {
-    return (millis() - _tiempoInicio) >= TIMEOUT_RESPUESTA;
+    if (_enPausaTimeout) return false;
+    return (millis() - _tiempoInicio - _tiempoPausadoMs) >= TIMEOUT_RESPUESTA;
+}
+
+void GameEngine::pausarTimeout() {
+    if (_estado == ESTADO_LISTENING && !_enPausaTimeout) {
+        _enPausaTimeout      = true;
+        _tiempoPausadoInicio = millis();
+    }
+}
+
+void GameEngine::reanudarTimeout() {
+    if (_enPausaTimeout) {
+        _enPausaTimeout   = false;
+        _tiempoPausadoMs += millis() - _tiempoPausadoInicio;
+    }
 }
 
 // ---- Getters ----

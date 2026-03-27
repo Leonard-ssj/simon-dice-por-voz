@@ -34,16 +34,24 @@ void setup() {
 
 // ---- loop ----
 void loop() {
-    EstadoJuego estado = juego.getEstado();
+    static char lineaBuf[64];
 
-    // Leer comando desde Serial (enviado por servidor Python)
-    Comando cmdSerial = serialLeerComando();
-    if (cmdSerial != CMD_DESCONOCIDO) {
-        juego.procesarComando(cmdSerial);
+    // Leer línea cruda del Serial
+    if (serialLeer(lineaBuf, sizeof(lineaBuf))) {
+        // PTT_INICIO / PTT_FIN: pausan el timeout mientras el browser transcribe
+        if (strcmp(lineaBuf, "PTT_INICIO") == 0) {
+            juego.pausarTimeout();
+        } else if (strcmp(lineaBuf, "PTT_FIN") == 0) {
+            juego.reanudarTimeout();
+        } else {
+            // Comando de voz: pasar al motor del juego
+            Comando cmd = stringAComando(lineaBuf);
+            if (cmd != CMD_DESCONOCIDO) {
+                serialEnviarDetectado(cmd);
+                juego.procesarComando(cmd);
+            }
+        }
     }
-
-    // Opción C: el browser graba el micrófono y envía el comando por Web Serial.
-    // audioCapturarYEnviar() ya no se usa — el browser hace el reconocimiento de voz.
 
     // Actualizar la máquina de estados (maneja timings internos)
     juego.update();
