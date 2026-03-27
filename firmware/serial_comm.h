@@ -9,7 +9,9 @@
 // Velocidad: 115200 baud
 // ============================================================
 
-#define SERIAL_BAUD 115200
+// 921600 baud necesarios para transferir audio PTT del INMP441
+// (16kHz x 16bit = 32 KB/s; 921600 baud ~ 64 KB/s utiles)
+#define SERIAL_BAUD 921600
 
 // Inicializa la comunicación Serial
 void serialInicializar();

@@ -4,23 +4,29 @@
 // hooks/useWebSerial.ts — Modo ESP32 (producción)
 //
 // Conecta directamente al ESP32 via Web Serial API (Chrome/Edge).
-// Reconocimiento de voz: Push-to-Talk (PTT) con dos modos:
+// Baud rate: 921600 (necesario para audio PTT del INMP441).
 //
-//   Modo A — Python Whisper local (mejor calidad):
-//     Browser conecta a ws://localhost:8766 (servidor_voz/main.py)
-//     PTT: PTT_INICIO\n → Serial (pausa timeout ESP32)
-//          PTT_INICIO → WS (abre mic de la PC, Whisper transcribe)
-//          PTT_FIN → WS (cierra mic, devuelve comando)
-//          PTT_FIN\n + ROJO\n → Serial
+// Reconocimiento de voz — tres modos (prioridad en orden):
 //
-//   Modo B — Whisper WASM en browser (fallback automático):
-//     PTT: PTT_INICIO\n → Serial (pausa timeout ESP32)
-//          WASM graba y transcribe en browser
-//          PTT_FIN\n + ROJO\n → Serial
+//   Modo A — Botón físico (SW1/SW2) + INMP441 (mejor):
+//     ESP32 envía BTN_INICIO → ESP32 captura audio en PSRAM
+//     → ESP32 envía AUDIO:START:N + base64 + AUDIO:END
+//     → browser reenvía audio a servidor_voz (Whisper Python)
+//     → servidor_voz devuelve comando → browser envía "ROJO\n"
 //
-// TTS: window.speechSynthesis anuncia cambios de estado en voz alta.
+//   Modo B — Teclado/botón UI + mic browser + Python Whisper:
+//     PTT_INICIO\n → Serial (pausa timeout ESP32)
+//     PTT_INICIO → WS servidor_voz (mic de la PC)
+//     PTT_FIN → WS → servidor_voz transcribe → devuelve voz
+//     PTT_FIN\n + ROJO\n → Serial
 //
-// Requisito: Chrome o Edge (Web Serial API no disponible en Firefox).
+//   Modo C — Teclado/botón UI + Whisper WASM (fallback automático):
+//     PTT_INICIO\n → Serial (pausa timeout ESP32)
+//     WASM graba y transcribe en browser
+//     PTT_FIN\n + ROJO\n → Serial
+//
+// TTS: window.speechSynthesis anuncia cambios de estado.
+// Requisito: Chrome o Edge (Web Serial API no soportado en Firefox).
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,7 +35,7 @@ import { useWhisperWASM } from "./useWhisperWASM";
 import { textoAComando } from "../lib/validador";
 
 const ESTADOS_ESCUCHA = new Set<string>(["IDLE", "LISTENING", "PAUSA", "GAMEOVER"]);
-const BAUD_RATE       = 115200;
+const BAUD_RATE       = 921600;   // 921600 para soportar audio PTT del INMP441
 const WS_VOZ_URL      = "ws://localhost:8766";
 
 let contadorLog = 0;
@@ -77,6 +83,11 @@ export function useWebSerial() {
   const wsVozRef          = useRef<WebSocket | null>(null);
   const wsVozActivoRef    = useRef(false);   // true = servidor_voz conectado y listo
 
+  // Acumulación de audio base64 enviado por el ESP32 (botón físico)
+  const audioModoRef      = useRef(false);       // true mientras llegan líneas base64
+  const audioTotalRef     = useRef(0);           // bytes esperados (del header)
+  const audioLineasRef    = useRef<string[]>([]); // líneas base64 acumuladas
+
   const whisper = useWhisperWASM();
 
   const webSerialDisponible =
@@ -105,6 +116,53 @@ export function useWebSerial() {
       agregarLog(`Error al enviar comando: ${e}`, "error");
     }
   }, [agregarLog]);
+
+  // ---- Relay de audio ESP32 → servidor_voz / WASM ----
+  const procesarAudioFinal = useCallback(async (lineasB64: string[]) => {
+    agregarLog("Audio PTT recibido del INMP441 — transcribiendo...", "voz");
+
+    // Decodificar base64 → ArrayBuffer
+    const b64 = lineasB64.join("");
+    const binStr = atob(b64);
+    const bytes  = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+
+    // Int16 little-endian → Float32 normalizado para Whisper
+    const samples = bytes.length / 2;
+    const float32 = new Float32Array(samples);
+    const view    = new DataView(bytes.buffer);
+    for (let i = 0; i < samples; i++) {
+      float32[i] = view.getInt16(i * 2, true) / 32768.0;
+    }
+
+    let texto  = "";
+    let comando = "DESCONOCIDO";
+
+    if (wsVozActivoRef.current && wsVozRef.current?.readyState === WebSocket.OPEN) {
+      // Enviar al servidor_voz como Float32Array binario
+      wsVozRef.current.send(JSON.stringify({ tipo: "audio_float32", datos: Array.from(float32) }));
+      // La respuesta llega por ws.onmessage → no esperamos aquí
+      return;
+    }
+
+    // Fallback WASM
+    try {
+      const res = await whisper.transcribirAudio(float32);
+      texto   = res.texto ?? "";
+      comando = textoAComando(texto);
+    } catch (e) {
+      agregarLog(`Error WASM: ${e}`, "error");
+    }
+
+    if (texto) agregarLog(`"${texto}" → ${comando}`, "voz");
+    setEstadoJuego((prev) => ({
+      ...prev,
+      ultimoTextoWhisper: texto || prev.ultimoTextoWhisper,
+      ultimaDeteccion:    comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
+    }));
+    await enviarComandoSerial("PTT_FIN");
+    if (comando !== "DESCONOCIDO") await enviarComandoSerial(comando);
+  }, [agregarLog, whisper, enviarComandoSerial]);
 
   // ---- Conectar servidor_voz (intento silencioso) ----
   const conectarVozWS = useCallback(() => {
@@ -135,7 +193,7 @@ export function useWebSerial() {
           }
         }
 
-        // Respuesta de transcripción tras PTT_FIN
+        // Respuesta de transcripción tras PTT_FIN (teclado) o audio_float32 (botón físico)
         if (datos.tipo === "voz") {
           const texto   = datos.texto   as string;
           const comando = datos.comando as string;
@@ -157,6 +215,11 @@ export function useWebSerial() {
           });
 
           escuchandoRef.current = false;
+        }
+
+        // Confirmación de ptt_estado del servidor (opcional, para UI)
+        if (datos.tipo === "ptt_estado") {
+          agregarLog(`Mic: ${datos.estado}`, "info");
         }
       } catch {}
     };
@@ -264,6 +327,46 @@ export function useWebSerial() {
 
       setEstadoJuego((prev) => {
         const siguiente = { ...prev };
+
+        // ── Audio PTT desde botón físico ESP32 ──────────────────
+        if (linea === "BTN_INICIO") {
+          // El jugador presionó SW1/SW2 en el kit físico
+          agregarLog("Botón PTT presionado — grabando INMP441...", "voz");
+          audioModoRef.current   = false;
+          audioTotalRef.current  = 0;
+          audioLineasRef.current = [];
+          return siguiente;
+        }
+
+        if (linea.startsWith("AUDIO:START:")) {
+          const n = parseInt(linea.slice(12));
+          audioModoRef.current   = true;
+          audioTotalRef.current  = n;
+          audioLineasRef.current = [];
+          agregarLog(`Recibiendo audio (${n} bytes)...`, "info");
+          return siguiente;
+        }
+
+        if (linea === "AUDIO:END") {
+          audioModoRef.current = false;
+          const lineas = audioLineasRef.current;
+          audioLineasRef.current = [];
+          // Procesar en background — no bloquea el loop de lectura
+          procesarAudioFinal(lineas);
+          return siguiente;
+        }
+
+        if (linea === "AUDIO:VACIO") {
+          agregarLog("Sin audio capturado (botón muy corto)", "info");
+          return siguiente;
+        }
+
+        // Línea de datos base64 dentro de AUDIO:START...AUDIO:END
+        if (audioModoRef.current) {
+          audioLineasRef.current.push(linea);
+          return siguiente;
+        }
+        // ────────────────────────────────────────────────────────
 
         if (linea === "READY") {
           agregarLog("ESP32 listo", "sistema");

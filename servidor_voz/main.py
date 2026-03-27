@@ -252,6 +252,24 @@ async def _manejar_cliente(websocket):
                         "comando": comando,
                     }))
 
+            elif tipo == "audio_float32":
+                # Audio enviado desde el botón físico ESP32 (INMP441 → base64 → browser → aquí)
+                datos_lista = datos.get("datos", [])
+                if datos_lista:
+                    audio_np = np.array(datos_lista, dtype=np.float32)
+                    if DEBUG:
+                        print(f"  [WS] audio_float32: {len(audio_np)} muestras de INMP441")
+                    texto, comando = transcribir(audio_np)
+                    if DEBUG:
+                        print(f'  [WS] "{texto}" → {comando}')
+                    await websocket.send(json.dumps({
+                        "tipo":    "voz",
+                        "texto":   texto,
+                        "comando": comando,
+                    }))
+                else:
+                    await websocket.send(json.dumps({"tipo": "voz", "texto": "", "comando": "DESCONOCIDO"}))
+
             elif tipo == "ping":
                 await websocket.send(json.dumps({"tipo": "pong"}))
 

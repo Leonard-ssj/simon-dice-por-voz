@@ -4,41 +4,69 @@
 #include <stddef.h>
 
 // ============================================================
-// audio_capture.h — Captura de audio por I2S (micrófono INMP441)
-// El micrófono está integrado en el kit OKYN-G5806
+// audio_capture.h — Captura de audio I2S (micrófono INMP441)
+//
+// Dos modos de operación:
+//
+//   PTT físico (nuevo): el jugador presiona un botón → captura
+//     audio en buffer PSRAM → al soltar envía base64 por Serial
+//     → browser recibe y usa Whisper para transcribir.
+//
+//   Stream continuo (Fase 2): captura + envía VAD + chunks
+//     (flujo original, no usado en Fase 1 con Serial).
+//
+// ⚠️ Pines INMP441 — verificar con el esquemático del kit
 // ============================================================
 
-// Configuración I2S del micrófono (integrado en el kit)
-// ⚠ Verificar pines exactos con documentación del OKYN-G5806
+// Periférico I2S del micrófono
 #define I2S_NUM_MIC      I2S_NUM_0
-#define I2S_SCK_PIN      12    // BCLK — verificar con kit
-#define I2S_WS_PIN       13    // LRCLK — verificar con kit
-#define I2S_SD_PIN       11    // DOUT del micrófono — verificar con kit
+
+// Pines I2S del INMP441 ⚠️ VERIFICAR con el kit físico MRD085A
+#define I2S_SCK_PIN      12    // BCLK (bit clock)   ⚠️ VERIFICAR
+#define I2S_WS_PIN       13    // LRCLK (word select) ⚠️ VERIFICAR
+#define I2S_SD_PIN       11    // DOUT del micrófono  ⚠️ VERIFICAR
 
 // Parámetros de captura
 #define SAMPLE_RATE      16000   // Hz — requerido por Whisper
 #define BITS_PER_SAMPLE  16      // bits por muestra
-#define BUFFER_SIZE      1024    // muestras por buffer
-#define CHUNK_DURACION   2000    // ms de audio por chunk enviado (Fase 1)
+#define BUFFER_SIZE      512     // muestras por lectura DMA
 
-// Umbral VAD (Voice Activity Detection) — ajustar según ruido del entorno
-#define VAD_UMBRAL       500     // amplitud mínima para considerar voz
+// Buffer PTT en PSRAM — máximo 10 segundos de audio
+#define AUDIO_PTT_MAX_MUESTRAS   (SAMPLE_RATE * 10)   // 160 000 muestras
+#define AUDIO_PTT_MAX_BYTES      (AUDIO_PTT_MAX_MUESTRAS * 2)  // 320 000 bytes
 
-// Inicializa el periférico I2S para el micrófono
+// Umbral VAD básico (amplitud mínima para detectar voz en modo stream)
+#define VAD_UMBRAL       500
+
+// ---- Inicialización ----
+
+// Inicializa el periférico I2S y asigna buffer PSRAM
 void audioInicializar();
 
-// Retorna true si hay voz activa en este momento (VAD simple)
+// ---- Modo PTT físico (botón) ----
+
+// Inicia la captura PTT: empieza a acumular audio en el buffer PSRAM
+void audioCapturaIniciar();
+
+// Detiene la captura y envía el audio por Serial en formato base64.
+// Protocolo:
+//   "AUDIO:START:<n_bytes>\n"   — n_bytes = muestras × 2
+//   "<línea base64 de 60 chars>\n"  × muchas líneas
+//   "AUDIO:END\n"
+// El browser recibe y reenvía a servidor_voz para Whisper.
+void audioCapturaPararYEnviar();
+
+// Retorna true si la captura PTT está activa
+bool audioCapturaActiva();
+
+// Llamar desde loop() mientras audioCapturaActiva() sea true.
+// Lee el DMA en modo no bloqueante y acumula en el buffer PSRAM.
+void audioCapturaLoop();
+
+// ---- Modo stream (Fase 2 / referencia) ----
+
+// Retorna true si hay voz activa (VAD simple)
 bool audioHayVoz();
 
-// Captura un chunk de audio y lo envía por Serial (Fase 1)
-// Retorna true si se capturó y envió correctamente
-bool audioCapturarYEnviar();
-
-// Espera a que empiece la voz y captura hasta el silencio
-// duracionMaxMs: tiempo máximo de espera antes de rendirse
-// Retorna true si se detectó y capturó voz
-bool audioEsperarVoz(int duracionMaxMs);
-
-// Lee muestras crudas en el buffer
-// Retorna cantidad de muestras leídas
+// Lee muestras crudas en el buffer externo
 size_t audioLeerMuestras(int16_t* buffer, size_t cantMuestras);

@@ -44,6 +44,11 @@ public:
     Comando getColorEsperado() const;
     bool juegoActivo() const;
 
+    // Congelan/reanudan el countdown durante transcripción PTT.
+    // Llamados desde botones.cpp (botón físico) o simon_dice.ino (Serial).
+    void pausarTimeout();
+    void reanudarTimeout();
+
 private:
     EstadoJuego _estado;
     Comando _secuencia[MAX_NIVEL];
@@ -54,9 +59,6 @@ private:
     int _puntuacion;
     unsigned long _tiempoInicio;
     bool _pausado;
-
-    void pausarTimeout();          // congela el timer mientras el browser transcribe
-    void reanudarTimeout();        // reanuda el timer
 
     void _generarSecuencia();
     void _agregarColor();
