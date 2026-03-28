@@ -2,6 +2,7 @@
 #include "led_control.h"
 #include "sound_control.h"
 #include "serial_comm.h"
+#include <Arduino.h>   // delay, millis, random, randomSeed
 
 // ============================================================
 // game_engine.cpp — Implementación de la lógica del juego

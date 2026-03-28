@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstring>   // strcmp
+
 // ============================================================
 // vocabulario.h — Fuente única del vocabulario del juego
 // Agregar o quitar palabras SOLO en este archivo.
