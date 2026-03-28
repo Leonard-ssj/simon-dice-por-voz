@@ -15,16 +15,18 @@
 //   Stream continuo (Fase 2): captura + envía VAD + chunks
 //     (flujo original, no usado en Fase 1 con Serial).
 //
-// ⚠️ Pines INMP441 — verificar con el esquemático del kit
+// Pines → ver pines.h (fuente única de configuración GPIO)
 // ============================================================
+
+#include "pines.h"
 
 // Periférico I2S del micrófono
 #define I2S_NUM_MIC      I2S_NUM_0
 
-// Pines I2S del INMP441 ⚠️ VERIFICAR con el esquemático del kit OKYN-G5806
-#define I2S_SCK_PIN      12    // BCLK (bit clock)    ⚠️ VERIFICAR
-#define I2S_WS_PIN       13    // LRCLK (word select) ⚠️ VERIFICAR
-#define I2S_SD_PIN       11    // DOUT del micrófono  ⚠️ VERIFICAR
+// Aliases locales que apuntan a pines.h
+#define I2S_SCK_PIN      PIN_MIC_BCLK
+#define I2S_WS_PIN       PIN_MIC_WS
+#define I2S_SD_PIN       PIN_MIC_DATA
 
 // Parámetros de captura
 #define SAMPLE_RATE      16000   // Hz — requerido por Whisper

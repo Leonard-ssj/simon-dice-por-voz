@@ -17,12 +17,11 @@
 // El PTT por teclado (barra espaciadora en el panel web) sigue
 // funcionando en paralelo — no se excluyen mutuamente.
 //
-// ⚠️ Pines GPIO — verificar con el esquemático del kit MRD085A
+// Pines → ver pines.h (fuente única de configuración GPIO)
+// PIN_BTN_SW1 y PIN_BTN_SW2 vienen de pines.h
 // ============================================================
 
-// Pines GPIO de los botones ⚠️ VERIFICAR con el kit físico
-#define PIN_BTN_SW1     0    // 音量+ → PTT principal  ⚠️ VERIFICAR
-#define PIN_BTN_SW2     35   // 音量- → PTT alternativo ⚠️ VERIFICAR
+#include "pines.h"
 
 // Debounce — tiempo mínimo entre detección de flancos (ms)
 #define BTN_DEBOUNCE_MS  50

@@ -8,19 +8,19 @@
 // El amplificador MAX98357A recibe audio I2S del ESP32-S3.
 // Usamos I2S_NUM_1 (el micrófono INMP441 usa I2S_NUM_0).
 //
-// ⚠️ Pines MAX98357A — verificar con el esquemático MRD085A
-//    Los pines mostrados son la asignación típica para este tipo
-//    de placa; ajustar si el kit tiene otra distribución.
+// Pines → ver pines.h (fuente única de configuración GPIO)
 // ============================================================
+
+#include "pines.h"
 
 // Periférico I2S para el speaker (el mic usa I2S_NUM_0)
 #define I2S_NUM_SPK       I2S_NUM_1
 
-// Pines I2S del MAX98357A ⚠️ VERIFICAR con el kit físico
-#define I2S_SPK_BCLK_PIN   5   // BCLK (bit clock)    ⚠️ VERIFICAR
-#define I2S_SPK_WS_PIN     4   // LRC  (word select)  ⚠️ VERIFICAR
-#define I2S_SPK_DOUT_PIN   6   // DIN  (data input)   ⚠️ VERIFICAR
-#define I2S_SPK_SD_PIN     7   // SD   (shutdown/on)  ⚠️ VERIFICAR
+// Aliases locales que apuntan a pines.h
+#define I2S_SPK_BCLK_PIN   PIN_SPK_BCLK
+#define I2S_SPK_WS_PIN     PIN_SPK_WS
+#define I2S_SPK_DOUT_PIN   PIN_SPK_DIN
+#define I2S_SPK_SD_PIN     PIN_SPK_SD
 
 // Parámetros de audio del speaker
 #define SPK_SAMPLE_RATE    16000   // Hz

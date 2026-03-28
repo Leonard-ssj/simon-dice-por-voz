@@ -10,12 +10,14 @@
 // Librería necesaria: Adafruit SSD1306 + Adafruit GFX
 //   (Sketch → Include Library → Manage Libraries)
 //
-// ⚠️ Pines I2C — verificar con el esquemático del kit MRD085A
+// Pines → ver pines.h (fuente única de configuración GPIO)
 // ============================================================
 
-// Pines I2C del display ⚠️ VERIFICAR con el kit físico
-#define OLED_SDA_PIN    21    // ⚠️ VERIFICAR
-#define OLED_SCL_PIN    22    // ⚠️ VERIFICAR
+#include "pines.h"
+
+// Aliases locales que apuntan a pines.h
+#define OLED_SDA_PIN    PIN_OLED_SDA
+#define OLED_SCL_PIN    PIN_OLED_SCL
 
 // Dimensiones del display 0.91"
 #define OLED_ANCHO      128
