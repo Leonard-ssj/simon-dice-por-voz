@@ -44,6 +44,7 @@ void sonidoInicializar() {
     };
 
     i2s_pin_config_t pines = {
+        .mck_io_num   = I2S_PIN_NO_CHANGE,   // sin MCLK (MAX98357A no lo necesita)
         .bck_io_num   = I2S_SPK_BCLK_PIN,
         .ws_io_num    = I2S_SPK_WS_PIN,
         .data_out_num = I2S_SPK_DOUT_PIN,

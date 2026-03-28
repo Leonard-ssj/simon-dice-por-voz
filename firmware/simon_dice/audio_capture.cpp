@@ -63,6 +63,7 @@ void audioInicializar() {
     };
 
     i2s_pin_config_t pines = {
+        .mck_io_num   = I2S_PIN_NO_CHANGE,   // sin MCLK (INMP441 no lo necesita)
         .bck_io_num   = I2S_SCK_PIN,
         .ws_io_num    = I2S_WS_PIN,
         .data_out_num = I2S_PIN_NO_CHANGE,
