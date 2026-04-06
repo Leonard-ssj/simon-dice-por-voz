@@ -71,6 +71,7 @@ function tts(texto: string) {
 
 export function useWebSerial() {
   const [estadoJuego, setEstadoJuego] = useState<EstadoCliente>(ESTADO_INICIAL);
+  const [esp32Grabando, setEsp32Grabando] = useState(false);  // true mientras INMP441 graba
 
   const puertoRef         = useRef<any>(null);
   const escritorRef       = useRef<WritableStreamDefaultWriter | null>(null);
@@ -78,6 +79,7 @@ export function useWebSerial() {
   const escuchandoRef     = useRef(false);
   const estadoRef         = useRef<EstadoJuego>("IDLE");
   const iniciarPTTRef     = useRef<() => void>(() => {});
+  const prevEstadoLogRef  = useRef<string>("");  // para de-duplicar log del heartbeat
 
   // WebSocket hacia servidor_voz (Python Whisper local)
   const wsVozRef          = useRef<WebSocket | null>(null);
@@ -120,19 +122,37 @@ export function useWebSerial() {
   // ---- Relay de audio ESP32 → servidor_voz / WASM ----
   const procesarAudioFinal = useCallback(async (lineasB64: string[]) => {
     agregarLog("Audio PTT recibido del INMP441 — transcribiendo...", "voz");
+    setEsp32Grabando(false);
 
-    // Decodificar base64 → ArrayBuffer
-    const b64 = lineasB64.join("");
-    const binStr = atob(b64);
-    const bytes  = new Uint8Array(binStr.length);
-    for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+    // Limpiar chars inválidos del base64 antes de decodificar.
+    // A 921600 baud pueden haber framing errors que introducen chars fuera del alfabeto.
+    const b64clean = lineasB64.join("").replace(/[^A-Za-z0-9+/=]/g, "");
+    if (!b64clean) {
+      agregarLog("Audio vacío o inválido", "info");
+      escuchandoRef.current = false;
+      await enviarComandoSerial("PTT_FIN");
+      return;
+    }
 
-    // Int16 little-endian → Float32 normalizado para Whisper
-    const samples = bytes.length / 2;
-    const float32 = new Float32Array(samples);
-    const view    = new DataView(bytes.buffer);
-    for (let i = 0; i < samples; i++) {
-      float32[i] = view.getInt16(i * 2, true) / 32768.0;
+    let float32: Float32Array;
+    try {
+      // Decodificar base64 → Int16 little-endian → Float32
+      const binStr = atob(b64clean);
+      const bytes  = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+
+      // >>> 1 = floor(bytes.length / 2) — evita DataView out-of-bounds si length es impar
+      const samples = bytes.length >>> 1;
+      float32 = new Float32Array(samples);
+      const view = new DataView(bytes.buffer);
+      for (let i = 0; i < samples; i++) {
+        float32[i] = view.getInt16(i * 2, true) / 32768.0;
+      }
+    } catch (e) {
+      agregarLog(`Error decodificando audio: ${e}`, "error");
+      escuchandoRef.current = false;
+      await enviarComandoSerial("PTT_FIN");
+      return;
     }
 
     let texto  = "";
@@ -162,6 +182,7 @@ export function useWebSerial() {
     }));
     await enviarComandoSerial("PTT_FIN");
     if (comando !== "DESCONOCIDO") await enviarComandoSerial(comando);
+    escuchandoRef.current = false;
   }, [agregarLog, whisper, enviarComandoSerial]);
 
   // ---- Conectar servidor_voz (intento silencioso) ----
@@ -236,57 +257,28 @@ export function useWebSerial() {
     };
   }, [agregarLog, enviarComandoSerial]);
 
-  // ---- PTT: iniciar grabación ----
+  // ---- PTT: iniciar grabación en INMP441 del ESP32 ----
+  //
+  // Tanto la barra espaciadora como el botón UI activan el INMP441 físico del ESP32.
+  // El mic de la PC via servidor_voz ya NO se usa para captura — solo para transcripción.
+  // Flujo: PTT_INICIO → ESP32 graba INMP441 → REC_FIN → ESP32 envía base64
+  //        → procesarAudioFinal → servidor_voz o WASM transcribe → comando
+  //
   const iniciarPTTVoz = useCallback(async () => {
     if (escuchandoRef.current) return;
     if (!ESTADOS_ESCUCHA.has(estadoRef.current)) return;
 
     escuchandoRef.current = true;
-
-    // Pausa el timeout del ESP32
+    setEsp32Grabando(true);   // feedback visual: "🔴 Grabando INMP441..."
     await enviarComandoSerial("PTT_INICIO");
+  }, [enviarComandoSerial]);
 
-    if (wsVozActivoRef.current && wsVozRef.current?.readyState === WebSocket.OPEN) {
-      // Modo A — Python Whisper local
-      // El servidor abre el mic; cuando el usuario suelte PTT enviamos PTT_FIN al WS.
-      // La respuesta voz llegará por ws.onmessage y completará el flujo.
-      wsVozRef.current.send(JSON.stringify({ tipo: "control", accion: "PTT_INICIO" }));
-      // escuchandoRef se libera en ws.onmessage cuando llega "voz"
-    } else {
-      // Modo B — Whisper WASM en browser
-      try {
-        const textoRaw = await whisper.escuchar(undefined, "ptt");
-        const comando  = textoAComando(textoRaw);
-
-        if (textoRaw) {
-          agregarLog(`"${textoRaw}" → ${comando}`, "voz");
-        }
-        setEstadoJuego((prev) => ({
-          ...prev,
-          ultimoTextoWhisper: textoRaw || prev.ultimoTextoWhisper,
-          ultimaDeteccion:    comando !== "DESCONOCIDO" ? comando : prev.ultimaDeteccion,
-        }));
-
-        await enviarComandoSerial("PTT_FIN");
-        if (comando !== "DESCONOCIDO") {
-          await enviarComandoSerial(comando);
-        }
-      } catch (err) {
-        agregarLog(`Error en reconocimiento de voz: ${err}`, "error");
-        await enviarComandoSerial("PTT_FIN"); // reanudar timeout aunque falle
-      } finally {
-        escuchandoRef.current = false;
-      }
-    }
-  }, [whisper, agregarLog, enviarComandoSerial]);
-
-  // PTT_FIN al servidor_voz cuando el usuario suelta la tecla (solo modo A)
+  // REC_FIN al ESP32 cuando el usuario suelta la tecla:
+  //   ESP32 detiene INMP441 y envía audio base64 → procesarAudioFinal lo recibe
   const finalizarPTTVoz = useCallback(() => {
-    whisper.finalizarGrabacion(); // para WASM (no-op si no está grabando)
-    if (wsVozActivoRef.current && wsVozRef.current?.readyState === WebSocket.OPEN) {
-      wsVozRef.current.send(JSON.stringify({ tipo: "control", accion: "PTT_FIN" }));
-    }
-  }, [whisper]);
+    whisper.cancelarEscucha(); // no-op en este modo
+    enviarComandoSerial("REC_FIN");
+  }, [whisper, enviarComandoSerial]);
 
   useEffect(() => {
     iniciarPTTRef.current = iniciarPTTVoz;
@@ -351,13 +343,26 @@ export function useWebSerial() {
           audioModoRef.current = false;
           const lineas = audioLineasRef.current;
           audioLineasRef.current = [];
-          // Procesar en background — no bloquea el loop de lectura
-          procesarAudioFinal(lineas);
+          procesarAudioFinal(lineas);  // procesarAudioFinal limpia esp32Grabando
           return siguiente;
         }
 
         if (linea === "AUDIO:VACIO") {
           agregarLog("Sin audio capturado (botón muy corto)", "info");
+          escuchandoRef.current = false;
+          setEsp32Grabando(false);
+          return siguiente;
+        }
+
+        // READY siempre se procesa — el ESP32 puede haber reiniciado a media
+        // transferencia, dejando audioModoRef y escuchandoRef en estado sucio.
+        if (linea === "READY") {
+          escuchandoRef.current  = false;
+          audioModoRef.current   = false;
+          audioLineasRef.current = [];
+          setEsp32Grabando(false);
+          agregarLog("ESP32 listo", "sistema");
+          tts("ESP32 listo. Presiona espacio para hablar.");
           return siguiente;
         }
 
@@ -368,10 +373,7 @@ export function useWebSerial() {
         }
         // ────────────────────────────────────────────────────────
 
-        if (linea === "READY") {
-          agregarLog("ESP32 listo", "sistema");
-          tts("ESP32 listo. Presiona espacio para hablar.");
-        } else if (linea.startsWith("STATE:")) {
+        if (linea.startsWith("STATE:")) {
           const nuevoEstado = linea.slice(6) as EstadoJuego;
           siguiente.estado = nuevoEstado;
           estadoRef.current = nuevoEstado;
@@ -392,7 +394,11 @@ export function useWebSerial() {
           if (nuevoEstado !== "SHOWING") {
             siguiente.ledActivo = null;
           }
-          agregarLog(`Estado: ${nuevoEstado}`, "info");
+          // Solo loguear si el estado cambió — evita spam del heartbeat
+          if (nuevoEstado !== prevEstadoLogRef.current) {
+            prevEstadoLogRef.current = nuevoEstado;
+            agregarLog(`Estado: ${nuevoEstado}`, "info");
+          }
         } else if (linea.startsWith("LED:")) {
           const color = linea.slice(4);
           siguiente.ledActivo = color === "OFF" ? null : color as ColorJuego;
@@ -417,10 +423,14 @@ export function useWebSerial() {
           siguiente.esperado = linea.slice(9) as ColorJuego;
         } else if (linea.startsWith("LEVEL:")) {
           siguiente.nivel = parseInt(linea.slice(6));
-          agregarLog(`Nivel ${siguiente.nivel}`, "sistema");
-          if (siguiente.nivel > 1) tts(`Nivel ${siguiente.nivel}.`);
+          // Solo loguear nivel si subió (no el nivel 1 del heartbeat)
+          if (siguiente.nivel > 1) {
+            agregarLog(`Nivel ${siguiente.nivel}`, "sistema");
+            tts(`Nivel ${siguiente.nivel}.`);
+          }
         } else if (linea.startsWith("SCORE:")) {
           siguiente.puntuacion = parseInt(linea.slice(6));
+          // Puntuación visible en el panel — no necesita log
         } else if (linea === "GAMEOVER") {
           siguiente.estado = "GAMEOVER";
           estadoRef.current = "GAMEOVER";
@@ -517,7 +527,7 @@ export function useWebSerial() {
     },
     whisperProgresoDescarga: whisper.progresoDescarga,
     whisperNivelMic:         puedoHablar ? whisper.nivelMic : 0,
-    whisperGrabando:         whisper.grabando,
+    whisperGrabando:         esp32Grabando,   // true = INMP441 grabando (feedback botón PTT)
     whisperMicAbierto:       whisper.micAbierto,
     whisperProcesando:       whisper.procesando,
     whisperTiempoRestante:   whisper.tiempoRestante,

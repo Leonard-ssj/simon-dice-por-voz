@@ -2,3 +2,6 @@ sounddevice     # captura de micrófono del sistema
 numpy           # procesamiento de audio PCM
 websockets      # servidor WebSocket
 openai-whisper  # reconocimiento de voz local
+pyserial        # comunicación serial con ESP32
+edge-tts        # voz neural mexicana
+pygame          # reproducción mp3 para edge-tts

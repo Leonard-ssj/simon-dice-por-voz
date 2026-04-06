@@ -181,7 +181,7 @@ export default function ConnectionPanel({
                 : dark ? "bg-emerald-500/15 text-emerald-400" : "bg-emerald-100 text-emerald-600"
             )}>
               <span className={cn("w-1.5 h-1.5 rounded-full", whisperLocalActivo ? "bg-blue-400" : "bg-emerald-400")} />
-              {whisperLocalActivo ? "Whisper local" : "Whisper listo"}
+              {whisperLocalActivo ? "Whisper servidor_voz" : "Whisper WASM"}
             </span>
           ) : (
             <span className={cn(
@@ -250,31 +250,52 @@ export default function ConnectionPanel({
       </div>
 
       {/* Info de dispositivos — segunda fila cuando conectado */}
-      {conectado && (dispositivoMic || dispositivoSpeaker || whisperModelo) && (
+      {conectado && (
         <div className="basis-full flex items-center gap-4 flex-wrap pt-1 border-t border-white/5 text-xs">
-          {dispositivoMic && (
-            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
-              <Mic size={10} />
-              {dispositivoMic}
-            </span>
-          )}
-          {!dispositivoMic && !whisperLocalActivo && (
-            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
-              <Mic size={10} />
-              Micrófono del navegador
-            </span>
-          )}
-          {dispositivoSpeaker && (
-            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
-              <Volume2 size={10} />
-              {dispositivoSpeaker}
-            </span>
-          )}
-          {whisperModelo && (
-            <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
-              <Cpu size={10} />
-              Whisper {whisperModelo}
-            </span>
+          {/* Modo Serial: mic INMP441 del ESP32 + motor Whisper */}
+          {modo === "serial" ? (
+            <>
+              {/* Mic siempre es el INMP441 del ESP32 */}
+              <span className={cn("flex items-center gap-1.5", dark ? "text-emerald-400/60" : "text-emerald-700/70")}>
+                <Mic size={10} />
+                Mic: INMP441 ESP32 (SW1/SW2 o barra esp.)
+              </span>
+              {/* Motor Whisper activo */}
+              <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+                <Cpu size={10} />
+                {whisperLocalActivo
+                  ? `Whisper: servidor_voz${whisperModelo ? ` (${whisperModelo})` : ""}`
+                  : "Whisper: WASM (browser)"}
+              </span>
+            </>
+          ) : (
+            /* Modo WebSocket: mostrar info del simulador */
+            <>
+              {dispositivoMic && (
+                <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+                  <Mic size={10} />
+                  {dispositivoMic}
+                </span>
+              )}
+              {!dispositivoMic && !whisperLocalActivo && (
+                <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+                  <Mic size={10} />
+                  Micrófono del navegador
+                </span>
+              )}
+              {dispositivoSpeaker && (
+                <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+                  <Volume2 size={10} />
+                  {dispositivoSpeaker}
+                </span>
+              )}
+              {whisperModelo && (
+                <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+                  <Cpu size={10} />
+                  Whisper {whisperModelo}
+                </span>
+              )}
+            </>
           )}
         </div>
       )}

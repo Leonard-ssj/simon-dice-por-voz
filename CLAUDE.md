@@ -142,10 +142,10 @@ GAMEOVER                       fin del juego
 
 ## Hardware
 
-### Kit OKYN-G5806 (marca OKYSTAR)
-- Chip: ESP32-S3-**N8R2** (8MB Flash, **2MB PSRAM** Quad-SPI, 240MHz, aceleración vectorial ESP-NN)
-- Micrófono: INMP441 I2S digital (SNR 61dB, 16kHz, 16-bit, mono) — integrado en el kit
-- Speaker: amplificador MAX98357A + altavoz pasivo — integrado en el kit
+### Kit OKYN-G5806 (marca OKYSTAR) — PCB 56483A_Y85_250412
+- Chip: ESP32-S3-**N16R8** (16MB Flash Octal, **8MB PSRAM OPI**, 240MHz, aceleración vectorial ESP-NN)
+- Micrófono: INMP441 I2S digital (SNR 61dB, 16kHz, 16-bit, mono) — módulo externo conectado al kit
+- Speaker: amplificador MAX98357A + altavoz pasivo — módulo externo conectado al kit
 - Pantalla: OLED SSD1306 0.91" (128×32 px) — integrado en el kit
 - Botones SW1 (Volumen+) y SW2 (Volumen-) — usados como PTT
 - WiFi integrado (no usado en este proyecto)
@@ -296,7 +296,11 @@ sistemas-inteligentes/
 # Instalar soporte ESP32 en Arduino: https://espressif.github.io/arduino-esp32/package_esp32_index.json
 # Board: ESP32S3 Dev Module
 # Upload Speed: 921600
-# Flash Size: 16MB (verificar con el kit)
+# Flash Size: 16MB (128Mb)      ← chip N16R8
+# PSRAM: OPI PSRAM               ← chip N16R8 tiene OPI PSRAM
+# Partition Scheme: Huge APP (3MB No OTA/1MB SPIFFS)
+# USB Mode: Hardware CDC and JTAG
+# USB CDC On Boot: Enabled
 ```
 
 ### Servidor Python (Fase 1)

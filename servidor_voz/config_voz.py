@@ -18,3 +18,10 @@ WHISPER_MODEL = "small"
 
 # Debug — muestra logs internos
 DEBUG = True
+
+SERIAL_ENABLED = True
+SERIAL_PORT = None
+SERIAL_BAUD = 230400
+
+PC_TTS_ENABLED = True
+SAVE_KIT_WAV = True
