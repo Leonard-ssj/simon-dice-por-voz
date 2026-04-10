@@ -12,7 +12,10 @@
       "Bash(python -c \":*)",
       "mcp__Desktop_Commander__start_search",
       "mcp__Desktop_Commander__start_process",
-      "mcp__Desktop_Commander__read_process_output"
+      "mcp__Desktop_Commander__read_process_output",
+      "WebFetch(domain:forum.arduino.cc)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:community.platformio.org)"
     ]
   }
 }
