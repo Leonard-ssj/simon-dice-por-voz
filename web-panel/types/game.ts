@@ -17,9 +17,9 @@ export type ColorJuego = "ROJO" | "VERDE" | "AZUL" | "AMARILLO";
 
 export type ResultadoTurno = "CORRECT" | "WRONG" | "TIMEOUT";
 
-// Mensajes que llegan desde el servidor WebSocket (Fase 1)
+// Mensajes que llegan desde el servidor WebSocket
 export type MensajeWS =
-  | { tipo: "ready"; raw: string; ts: number }
+  | { tipo: "ready"; raw: string; ts: number; whisperDisponible?: boolean; whisperModelo?: string; tiempoTimeout?: number }
   | { tipo: "state"; estado: EstadoJuego; raw: string; ts: number }
   | { tipo: "detected"; palabra: string; raw: string; ts: number }
   | { tipo: "result"; resultado: ResultadoTurno; raw: string; ts: number }

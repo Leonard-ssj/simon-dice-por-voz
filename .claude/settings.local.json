@@ -15,7 +15,17 @@
       "mcp__Desktop_Commander__read_process_output",
       "WebFetch(domain:forum.arduino.cc)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:community.platformio.org)"
+      "WebFetch(domain:community.platformio.org)",
+      "Bash(\"C:\\\\Users\\\\leona\\\\Dev\\\\escolar\\\\sistemas-inteligentes\\\\docs\\\\arquitectura.md\")",
+      "Bash(dir \"C:\\\\Users\\\\leona\\\\Dev\\\\escolar\\\\sistemas-inteligentes\\\\firmware\\\\proyecto\")",
+      "Bash(dir \"C:\\\\Users\\\\leona\\\\Dev\\\\escolar\\\\sistemas-inteligentes\\\\servidor_pc\")",
+      "Bash(dir \"C:\\\\Users\\\\leona\\\\Dev\\\\escolar\\\\sistemas-inteligentes\\\\docs\")",
+      "Bash(dir C:UsersleonaDevescolarsistemas-inteligentestestssimulador_pc)",
+      "Bash(dir /s /b \"C:\\\\Users\\\\leona\\\\Dev\\\\escolar\\\\sistemas-inteligentes\\\\tests\")",
+      "Bash(dir /s /b C:UsersleonaDevescolarsistemas-inteligentes)",
+      "Bash(findstr /i \"test\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\leona\\\\Dev\\\\escolar\\\\sistemas-inteligentes\" -Recurse -Include \"*.py\")",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

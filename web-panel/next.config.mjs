@@ -1,5 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Desactivar StrictMode en desarrollo.
+  // StrictMode en React 18 invoca los state-updaters DOS veces en dev,
+  // lo que provoca entradas duplicadas en el log del panel.
+  // En producción no tiene efecto (Vercel ya lo desactiva solo).
+  reactStrictMode: false,
+
   webpack: (config) => {
     // @huggingface/transformers depende de onnxruntime-node (binario nativo de Node.js)
     // y de sharp. En el browser solo se necesita onnxruntime-web (WASM).

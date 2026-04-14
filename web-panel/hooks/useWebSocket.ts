@@ -1,9 +1,9 @@
 "use client";
 
 // ============================================================
-// hooks/useWebSocket.ts — Modo Simulador PC (Fase 1)
+// hooks/useWebSocket.ts — Conexión WebSocket al Servidor PC o Simulador
 //
-// Conecta al simulador Python via WebSocket.
+// Conecta por WebSocket al servidor Python (servidor_pc o simulador).
 //
 // Reconocimiento de voz — modo DUAL con auto-detección:
 //
@@ -30,7 +30,8 @@ import { textoAComando } from "../lib/validador";
 // Estados en los que el usuario puede hablar
 const ESTADOS_ESCUCHA = new Set<string>(["IDLE", "LISTENING", "PAUSA", "GAMEOVER"]);
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8765";
+// URL por defecto (se puede sobreescribir por parámetro o por variable de entorno)
+const WS_URL_DEFAULT = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8765";
 
 const NOMBRES_ESTADO: Record<string, string> = {
   IDLE:       "Esperando",
@@ -65,7 +66,13 @@ const ESTADO_INICIAL: EstadoCliente = {
 
 let contadorLog = 0;
 
-export function useWebSocket() {
+export function useWebSocket(wsUrl?: string) {
+  // urlRef guarda la URL activa. Se actualiza cuando el prop wsUrl cambia,
+  // y se lee dentro de conectar() — así el cambio de modo antes de conectar
+  // siempre usa la URL correcta sin reinicializar el hook.
+  const urlRef = useRef(wsUrl ?? WS_URL_DEFAULT);
+  useEffect(() => { urlRef.current = wsUrl ?? WS_URL_DEFAULT; }, [wsUrl]);
+
   const [estadoJuego, setEstadoJuego] = useState<EstadoCliente>(ESTADO_INICIAL);
   const ws             = useRef<WebSocket | null>(null);
   const escuchandoRef  = useRef(false);
@@ -98,8 +105,16 @@ export function useWebSocket() {
     setRawProcesando(v);
   }, []);
 
+  // Dedup: evita que el mismo mensaje se agregue dos veces en < 50ms.
+  // En dev, React StrictMode puede invocar updaters dos veces; esto lo neutraliza.
+  const _logRecientes = useRef(new Set<string>());
+
   const agregarLog = useCallback(
     (mensaje: string, tipo: "info" | "correcto" | "error" | "voz" | "sistema" = "info") => {
+      const key = `${tipo}|${mensaje}`;
+      if (_logRecientes.current.has(key)) return;
+      _logRecientes.current.add(key);
+      setTimeout(() => _logRecientes.current.delete(key), 50);
       setEstadoJuego((prev) => ({
         ...prev,
         log: [
@@ -233,7 +248,12 @@ export function useWebSocket() {
               whisperModelo?: string;
               dispositivoMic?: string;
               dispositivoSpeaker?: string;
+              tiempoTimeout?: number;
             };
+            // Guardar el timeout configurado en el servidor para el countdown
+            if (rm.tiempoTimeout && rm.tiempoTimeout > 0) {
+              tiempoTimeoutRef.current = rm.tiempoTimeout;
+            }
             const disponible = rm.whisperDisponible === true;
             whisperDisponibleRef.current = disponible;
             setWhisperLocalActivo(disponible);
@@ -250,8 +270,8 @@ export function useWebSocket() {
 
             agregarLog(
               disponible
-                ? `Simulador listo — Whisper local activo (modelo: ${rm.whisperModelo ?? "local"})`
-                : "Simulador listo — usando Whisper del navegador",
+                ? `Servidor PC listo — Whisper ${rm.whisperModelo ?? "local"} activo`
+                : "Conectado — usando Whisper del navegador (WASM)",
               "sistema"
             );
             break;
@@ -361,12 +381,13 @@ export function useWebSocket() {
       ws.current?.readyState === WebSocket.CONNECTING
     ) return;
 
-    agregarLog(`Conectando a ${WS_URL}...`, "sistema");
-    const socket = new WebSocket(WS_URL);
+    const url = urlRef.current;
+    agregarLog(`Conectando a ${url}...`, "sistema");
+    const socket = new WebSocket(url);
 
     socket.onopen = () => {
       setEstadoJuego((prev) => ({ ...prev, conectado: true }));
-      agregarLog("Conectado. Presiona ESPACIO o el botón para hablar.", "sistema");
+      agregarLog("Conectado. Presiona ESPACIO para hablar.", "sistema");
     };
 
     socket.onmessage = (event) => {
@@ -402,6 +423,75 @@ export function useWebSocket() {
 
     ws.current = socket;
   }, [agregarLog, procesarMensaje, whisper, setRawGrabandoAll, setRawProcesandoAll]);
+
+  // ---- Countdown sincronizado con el servidor ----
+  // tiempoRestanteMs: ms restantes del turno (LISTENING). null = no es turno.
+  // Se pausa automáticamente mientras se graba/procesa audio (igual que el servidor).
+  const tiempoTimeoutRef     = useRef<number>(60000); // se actualiza con el valor del servidor
+  const [tiempoRestanteMs, setTiempoRestanteMs] = useState<number | null>(null);
+  const countdownRef         = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownPausadoRef  = useRef(false);
+  const tiempoInicioRef      = useRef<number>(0);
+  const tiempoAcumuladoRef   = useRef<number>(0); // ms ya transcurridos antes de la última pausa
+
+  const _pararCountdown = useCallback(() => {
+    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
+    setTiempoRestanteMs(null);
+  }, []);
+
+  const _pausarCountdown = useCallback(() => {
+    if (countdownPausadoRef.current) return;
+    countdownPausadoRef.current = true;
+    // Acumular tiempo transcurrido antes de pausar
+    tiempoAcumuladoRef.current += Date.now() - tiempoInicioRef.current;
+  }, []);
+
+  const _reanudarCountdown = useCallback(() => {
+    if (!countdownPausadoRef.current) return;
+    countdownPausadoRef.current = false;
+    tiempoInicioRef.current = Date.now();
+  }, []);
+
+  // Observar cuando el estado cambia a/desde LISTENING
+  useEffect(() => {
+    const estado = estadoJuego.estado;
+    if (estado === "LISTENING") {
+      // Reiniciar countdown
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      tiempoInicioRef.current    = Date.now();
+      tiempoAcumuladoRef.current = 0;
+      countdownPausadoRef.current = false;
+      const total = tiempoTimeoutRef.current;
+      setTiempoRestanteMs(total);
+
+      countdownRef.current = setInterval(() => {
+        if (countdownPausadoRef.current) return;  // pausado — no decrementar
+        const elapsed = tiempoAcumuladoRef.current + (Date.now() - tiempoInicioRef.current);
+        const restante = Math.max(0, total - elapsed);
+        setTiempoRestanteMs(restante);
+        if (restante <= 0 && countdownRef.current) {
+          clearInterval(countdownRef.current);
+          countdownRef.current = null;
+        }
+      }, 200);
+    } else {
+      _pararCountdown();
+    }
+  }, [estadoJuego.estado, _pararCountdown]);
+
+  // Pausar/reanudar countdown cuando empieza/termina grabación o procesamiento
+  useEffect(() => {
+    if (rawGrabando || rawProcesando) {
+      _pausarCountdown();
+    } else {
+      _reanudarCountdown();
+    }
+  }, [rawGrabando, rawProcesando, _pausarCountdown, _reanudarCountdown]);
+
+  // Cleanup al desmontar
+  useEffect(() => {
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
+  }, []);
 
   // ---- Desconectar ----
 
@@ -452,6 +542,7 @@ export function useWebSocket() {
     whisperMicAbierto:       micAbierto,
     whisperProcesando:       procesando,
     whisperTiempoRestante:   whisperLocalActivo ? null : whisper.tiempoRestante,
+    tiempoRestanteMs,        // countdown del turno sincronizado con el servidor (ms, null fuera de LISTENING)
     iniciarPTT:              iniciarPTTVoz,
     finalizarPTT:            finalizarPTTExterior,
     puedoHablar,

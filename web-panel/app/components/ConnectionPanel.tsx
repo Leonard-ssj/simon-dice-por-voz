@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 
 interface Props {
   conectado: boolean;
-  modo: "websocket" | "serial";
-  onModoChange: (m: "websocket" | "serial") => void;
+  modo: "simulador" | "servidor" | "serial";
+  onModoChange: (m: "simulador" | "servidor" | "serial") => void;
   onConectar: () => void;
   onDesconectar: () => void;
   serialDisponible?: boolean;
@@ -58,6 +58,9 @@ export default function ConnectionPanel({
   onReiniciar,
 }: Props) {
   const mostrarWhisper = modo === "serial" ? serialDisponible : true;
+  // En modo servidor el micrófono es el del ESP32 (PTT físico o barra espaciadora).
+  // En modo simulador el micrófono es el de la laptop (sounddevice o WASM).
+  const esEsp32 = modo === "servidor" || modo === "serial";
 
   // Color de la barra de nivel: verde si sobre umbral, azul si bajo
   const barColor = whisperNivelMic > 0.25
@@ -71,22 +74,42 @@ export default function ConnectionPanel({
       "flex flex-wrap items-center gap-3 px-4 py-3 rounded-2xl border",
       dark ? "border-white/5 bg-white/2" : "border-slate-200 bg-white"
     )}>
-      {/* Selector de modo */}
+      {/* Selector de modo — tres tabs */}
       <div className={cn("flex gap-1 p-1 rounded-xl", dark ? "bg-white/5" : "bg-slate-100")}>
+        {/* Tab 1: Servidor PC + ESP32 (servidor_pc/servidor.py — puerto 8766) */}
         <button
-          onClick={() => onModoChange("websocket")}
+          onClick={() => onModoChange("servidor")}
+          title="Servidor PC — ejecuta: cd servidor_pc && python servidor.py"
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200",
-            modo === "websocket"
+            modo === "servidor"
               ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/30"
               : dark ? "text-white/40 hover:text-white/70" : "text-slate-400 hover:text-slate-600"
           )}
         >
           <Radio size={12} />
-          Simulador — WebSocket
+          Servidor PC
         </button>
+
+        {/* Tab 2: Simulador de laptop (tests/simulador_pc/main.py — puerto 8765) */}
+        <button
+          onClick={() => onModoChange("simulador")}
+          title="Simulador — ejecuta: cd tests/simulador_pc && python main.py"
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200",
+            modo === "simulador"
+              ? "bg-emerald-600 text-white shadow-lg shadow-emerald-500/30"
+              : dark ? "text-white/40 hover:text-white/70" : "text-slate-400 hover:text-slate-600"
+          )}
+        >
+          <Cpu size={12} />
+          Simulador
+        </button>
+
+        {/* Tab 3: ESP32 Directo — Web Serial API (Fase 2, sin servidor Python) */}
         <button
           onClick={() => onModoChange("serial")}
+          title="Web Serial API — solo Chrome/Edge, sin servidor Python"
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200",
             modo === "serial"
@@ -95,7 +118,7 @@ export default function ConnectionPanel({
           )}
         >
           <Usb size={12} />
-          ESP32 — Web Serial
+          ESP32 Directo
         </button>
       </div>
 
@@ -109,8 +132,30 @@ export default function ConnectionPanel({
       {/* Badge + barra de nivel de Whisper — solo cuando conectado o ya cargado */}
       {mostrarWhisper && (conectado || whisperCargado || whisperProgreso !== "") && (
         <div className="flex items-center gap-2">
-          {/* Botón PTT — mantener presionado para hablar */}
-          {puedoHablar && iniciarPTT && finalizarPTT ? (
+
+          {/* ── Modo Servidor PC: solo SPACEBAR, sin botón visual ── */}
+          {modo === "servidor" && puedoHablar && (
+            <span className={cn(
+              "flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border",
+              whisperGrabando
+                ? "bg-emerald-500/20 text-emerald-300 border-emerald-400/40 animate-pulse"
+                : whisperProcesando
+                  ? "bg-purple-500/20 text-purple-300 border-purple-400/40 animate-pulse"
+                  : dark
+                    ? "bg-white/5 text-white/40 border-white/10"
+                    : "bg-slate-100 text-slate-500 border-slate-200"
+            )}>
+              <Mic size={11} className={whisperGrabando ? "text-emerald-400" : ""} />
+              {whisperGrabando
+                ? "🔴 Grabando..."
+                : whisperProcesando
+                  ? "⚙ Procesando..."
+                  : "ESPACIO para hablar"}
+            </span>
+          )}
+
+          {/* ── Modo Simulador/Serial: botón PTT visual ── */}
+          {modo !== "servidor" && puedoHablar && iniciarPTT && finalizarPTT ? (
             <button
               onMouseDown={iniciarPTT}
               onMouseUp={finalizarPTT}
@@ -252,35 +297,51 @@ export default function ConnectionPanel({
       {/* Info de dispositivos — segunda fila cuando conectado */}
       {conectado && (
         <div className="basis-full flex items-center gap-4 flex-wrap pt-1 border-t border-white/5 text-xs">
-          {/* Modo Serial: mic INMP441 del ESP32 + motor Whisper */}
-          {modo === "serial" ? (
+
+          {/* ── Modo Servidor PC: micrófono = ESP32 MAX4466 ── */}
+          {modo === "servidor" && (
             <>
-              {/* Mic siempre es el INMP441 del ESP32 */}
               <span className={cn("flex items-center gap-1.5", dark ? "text-emerald-400/60" : "text-emerald-700/70")}>
                 <Mic size={10} />
-                Mic: INMP441 ESP32 (SW1/SW2 o barra esp.)
+                Mic: ESP32 MAX4466 — ESPACIO para grabar
               </span>
-              {/* Motor Whisper activo */}
               <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
                 <Cpu size={10} />
                 {whisperLocalActivo
-                  ? `Whisper: servidor_voz${whisperModelo ? ` (${whisperModelo})` : ""}`
+                  ? `Whisper Python${whisperModelo ? ` · ${whisperModelo}` : ""}`
+                  : "Whisper: WASM (fallback)"}
+              </span>
+            </>
+          )}
+
+          {/* ── Modo Serial: INMP441 del kit ESP32 ── */}
+          {modo === "serial" && (
+            <>
+              <span className={cn("flex items-center gap-1.5", dark ? "text-emerald-400/60" : "text-emerald-700/70")}>
+                <Mic size={10} />
+                Mic: INMP441 ESP32 (botones del kit)
+              </span>
+              <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
+                <Cpu size={10} />
+                {whisperLocalActivo
+                  ? `Whisper servidor${whisperModelo ? ` (${whisperModelo})` : ""}`
                   : "Whisper: WASM (browser)"}
               </span>
             </>
-          ) : (
-            /* Modo WebSocket: mostrar info del simulador */
+          )}
+
+          {/* ── Modo Simulador: micrófono = laptop (sounddevice / browser) ── */}
+          {modo === "simulador" && (
             <>
-              {dispositivoMic && (
+              {dispositivoMic ? (
                 <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
                   <Mic size={10} />
                   {dispositivoMic}
                 </span>
-              )}
-              {!dispositivoMic && !whisperLocalActivo && (
+              ) : (
                 <span className={cn("flex items-center gap-1.5", dark ? "text-white/30" : "text-slate-400")}>
                   <Mic size={10} />
-                  Micrófono del navegador
+                  {whisperLocalActivo ? "Mic sistema (sounddevice)" : "Micrófono del navegador"}
                 </span>
               )}
               {dispositivoSpeaker && (
@@ -297,6 +358,7 @@ export default function ConnectionPanel({
               )}
             </>
           )}
+
         </div>
       )}
     </div>

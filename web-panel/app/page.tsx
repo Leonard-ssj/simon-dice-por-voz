@@ -18,18 +18,27 @@ import SesionStats from "./components/SesionStats";
 import ParticleBackground from "./components/ParticleBackground";
 import type { ColorJuego } from "../types/game";
 
-type Modo = "websocket" | "serial";
+// Tres modos de conexión:
+//   "simulador" → WebSocket al simulador de laptop (tests/simulador_pc, puerto 8765)
+//   "servidor"  → WebSocket al Servidor PC + ESP32    (servidor_pc,      puerto 8766)
+//   "serial"    → Web Serial API directo al ESP32     (Fase 2, sin servidor Python)
+type Modo = "simulador" | "servidor" | "serial";
+
+const WS_URL_SIMULADOR = "ws://localhost:8765";
+const WS_URL_SERVIDOR  = "ws://localhost:8766";
 
 export default function Home() {
-  const [modo, setModo]         = useState<Modo>("websocket");
+  const [modo, setModo]         = useState<Modo>("servidor");
   const [dark, setDark]         = useState(true);   // oscuro por defecto
   const [showHelp, setShowHelp] = useState(false);
 
-  const ws     = useWebSocket();
+  // wsUrl cambia cuando el usuario elige otro modo — se aplica en el próximo conectar()
+  const wsUrl  = modo === "servidor" ? WS_URL_SERVIDOR : WS_URL_SIMULADOR;
+  const ws     = useWebSocket(wsUrl);
   const serial = useWebSerial();
-  const activo = modo === "websocket" ? ws : serial;
+  const activo = modo === "serial" ? serial : ws;
   const { estadoJuego } = activo;
-  const limpiarLog = modo === "websocket" ? ws.limpiarLog : undefined;
+  const limpiarLog = modo !== "serial" ? ws.limpiarLog : undefined;
   const whisperProgreso       = activo.whisperProgresoDescarga ?? "";
   const whisperNivelMic       = activo.whisperNivelMic ?? 0;
   const whisperGrabando       = activo.whisperGrabando ?? false;
@@ -263,6 +272,8 @@ export default function Home() {
                   ultimoResultado={estadoJuego.ultimoResultado}
                   dark={dark}
                   grabando={whisperGrabando || estadoJuego.whisperTranscribiendo}
+                  tiempoRestanteMs={(activo as typeof ws).tiempoRestanteMs ?? null}
+                  tiempoTotalMs={60000}
                 />
               </div>
 

@@ -1,0 +1,26 @@
+# ============================================================
+# requirements.txt — Servidor PC (Simon Dice por Voz)
+# Instalar con: pip install -r requirements.txt
+# ============================================================
+
+# Audio pipeline
+openai-whisper      # Reconocimiento de voz local (descarga ~244MB la primera vez)
+numpy               # Procesamiento numérico de audio
+scipy               # Filtros DSP (HPF, LPF, resample)
+noisereduce         # Sustracción espectral del ruido ADC
+
+# Comunicación
+pyserial            # Puerto Serial con ESP32
+websockets>=14      # Servidor WebSocket para el panel web
+sounddevice         # Reproducción de tonos del juego (laptop)
+
+# TTS (narrador de voz)
+pyttsx3             # TTS local SAPI (fallback sin internet)
+edge-tts            # TTS neural es-MX-DaliaNeural (requiere internet, opcional)
+pygame              # Reproducción MP3 de edge-tts (opcional, va con edge-tts)
+
+# Notas:
+# - Si la CPU es lenta, cambiar WHISPER_MODEL a "base" en config.py
+# - edge-tts y pygame son opcionales; sin ellos usa SAPI de Windows
+# - DeepFilterNet (pip install deepfilternet) mejora calidad de audio
+#   pero no es necesario para el funcionamiento básico

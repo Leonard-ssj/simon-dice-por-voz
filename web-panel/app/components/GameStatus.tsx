@@ -41,7 +41,7 @@ const COLOR_BADGE: Record<string, string> = {
   AMARILLO: "bg-yellow-400 text-yellow-900",
 };
 
-export default function GameStatus({ estado, ultimaDeteccion, ultimoTextoWhisper, ultimoResultado, dark, grabando = false }: Props & { grabando?: boolean }) {
+export default function GameStatus({ estado, ultimaDeteccion, ultimoTextoWhisper, ultimoResultado, dark, grabando = false, tiempoRestanteMs = null, tiempoTotalMs = 60000 }: Props & { grabando?: boolean; tiempoRestanteMs?: number | null; tiempoTotalMs?: number }) {
   const config = ESTADO_CONFIG[estado] ?? ESTADO_CONFIG.IDLE;
   const { Icon } = config;
   const colorClass = dark ? config.colorDark : config.colorLight;
@@ -92,8 +92,52 @@ export default function GameStatus({ estado, ultimaDeteccion, ultimoTextoWhisper
               "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono border",
               dark ? "border-white/20 bg-white/8 text-white/60" : "border-slate-300 bg-slate-100 text-slate-600"
             )}>ESPACIO</kbd>
-            {" "}o el botón 🎤 para hablar
+            {" "}para hablar
           </motion.p>
+        )}
+      </AnimatePresence>
+
+      {/* Barra de countdown del turno — sincronizada con el servidor */}
+      <AnimatePresence>
+        {estado === "LISTENING" && tiempoRestanteMs !== null && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="flex flex-col gap-1"
+          >
+            {/* Barra de progreso */}
+            <div className={cn(
+              "w-full h-1.5 rounded-full overflow-hidden",
+              dark ? "bg-white/8" : "bg-slate-200"
+            )}>
+              <motion.div
+                className={cn(
+                  "h-full rounded-full transition-colors duration-300",
+                  tiempoRestanteMs > tiempoTotalMs * 0.5
+                    ? "bg-emerald-500"
+                    : tiempoRestanteMs > tiempoTotalMs * 0.25
+                      ? "bg-yellow-400"
+                      : "bg-red-500"
+                )}
+                style={{ width: `${Math.max(0, (tiempoRestanteMs / tiempoTotalMs) * 100)}%` }}
+                // No animar el width con framer-motion — lo actualiza el state cada 200ms
+                transition={{ duration: 0 }}
+              />
+            </div>
+            {/* Segundos restantes */}
+            <div className={cn(
+              "text-right text-[10px] tabular-nums font-mono",
+              tiempoRestanteMs > tiempoTotalMs * 0.25
+                ? dark ? "text-white/30" : "text-slate-400"
+                : "text-red-500 font-semibold"
+            )}>
+              {grabando
+                ? "⏸ Grabando..."
+                : `${Math.ceil(tiempoRestanteMs / 1000)}s`}
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 

@@ -41,7 +41,12 @@ class JuegoSimulador:
     al WebSocket, terminal o cualquier otra salida.
     """
 
-    def __init__(self):
+    def __init__(self, timeout_ms: int = None):
+        # timeout_ms permite sobreescribir TIMEOUT_RESPUESTA sin tocar config_test.py.
+        # servidor_pc pasa config.py:TIMEOUT_RESPUESTA (60s).
+        # El simulador de tests usa el valor por defecto de config_test.py (30s).
+        self._timeout_ms    = timeout_ms if timeout_ms is not None else TIMEOUT_RESPUESTA
+
         self._estado        = Estado.IDLE
         self._secuencia     = []
         self._pos_escuchar  = 0
@@ -167,7 +172,7 @@ class JuegoSimulador:
         """Llamar periódicamente para verificar timeout."""
         if self._estado == Estado.LISTENING and not self._en_pausa_timeout and not self._terminando:
             elapsed = (time.time() - self._tiempo_inicio - self._tiempo_pausado) * 1000
-            if elapsed >= TIMEOUT_RESPUESTA:
+            if elapsed >= self._timeout_ms:
                 self._terminando = True
                 self.on_resultado("TIMEOUT")
                 self.on_log("Tiempo agotado.")

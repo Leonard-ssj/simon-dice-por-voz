@@ -1,407 +1,430 @@
-# Arquitectura — Simon Dice por Voz
+# Simon Dice por Voz — Documentación Técnica
 
-## Visión general
+**Materia:** Sistemas Inteligentes
+**Hardware:** ESP32-S3 (YD-ESP32-S3 en protoboard)
+**Arquitectura:** Fase 1 — Prototipo con PC
 
-El sistema tiene dos modos de operación, ambos usan el mismo Web Panel en Next.js:
+---
 
-| Modo             | Cuándo usarlo                   | Requiere                      |
-| ---------------- | ------------------------------- | ----------------------------- |
-| **Simulador PC** | Pruebas sin hardware            | Python + Chrome/Edge          |
-| **Modo ESP32**   | Con kit ESP32 real (producción) | Kit + cable USB + Chrome/Edge |
+## 1. Visión general
 
-***
-
-## Diagrama general del sistema
-
-> Ver diagrama detallado en [diagrama_arquitectura_completa.md](diagrama_arquitectura_completa.md)
-
-```mermaid
-graph TD
-  subgraph SIMULADOR["Modo Simulador PC"]
-    PY["Python main.py\n(motor del juego)"]
-    WS["ws_server.py\nWebSocket :8765"]
-    MIC["sounddevice\n(micrófono sistema)"]
-    TTS["edge-tts / SAPI\n(narrador TTS)"]
-    WHISPER_PY["openai-whisper\n(modelo small)"]
-    PY --> WS
-    PY --> TTS
-    WS --> MIC --> WHISPER_PY
-  end
-
-  subgraph PANEL["Web Panel — Chrome/Edge"]
-    PAGE["page.tsx\n(dashboard)"]
-    WS_HOOK["useWebSocket.ts"]
-    SERIAL_HOOK["useWebSerial.ts"]
-    WASM["useWhisperWASM.ts\n+ whisper.worker.ts"]
-    VAL["validador.ts"]
-    PAGE --> WS_HOOK & SERIAL_HOOK
-    WASM --> VAL
-  end
-
-  subgraph ESP32["Modo Hardware — Kit MRD085A"]
-    FW["Firmware C++\n(ESP32-S3-N16R8)"]
-    GAME["game_engine.cpp\n(máquina de estados)"]
-    LEDS["led_control.cpp\n(4 LEDs físicos)"]
-    SND["sound_control.cpp\n(speaker MAX98357A I2S)"]
-    OLED["oled_display.cpp\n(SSD1306 0.91\")"]
-    BTN["botones.cpp\n(SW1/SW2 PTT físico)"]
-    FW --> GAME --> LEDS & SND & OLED
-    BTN --> FW
-  end
-
-  subgraph VZ["Servidor de Voz (opcional)"]
-    SRV["servidor_voz/main.py\nWebSocket :8766\nWhisper Python"]
-  end
-
-  WS_HOOK <-->|"WebSocket JSON\nws://localhost:8765"| WS
-  SERIAL_HOOK <-->|"Web Serial\n921600 baud\ntexto plano + base64 audio"| FW
-  SERIAL_HOOK <-->|"WebSocket JSON\nws://localhost:8766\naudio Float32"| SRV
-  WASM -->|"texto transcrito (fallback)"| SERIAL_HOOK
-```
-
-***
-
-## Modo Simulador PC
-
-El simulador replica el comportamiento del ESP32 en la PC: corre el motor del juego,
-simula los LEDs en la terminal y reproduce tonos y TTS por el speaker del sistema.
-
-### Reconocimiento de voz — modo DUAL
-
-```mermaid
-flowchart LR
-  A[/"READY {whisperDisponible: true}"/] --> B{¿Python\ntiene Whisper?}
-  B -- Sí --> C["Modo PTT local\nPython captura mic"]
-  B -- No --> D["Modo WASM\nbrowser descarga modelo\n~125 MB"]
-  C --> E["PTT_INICIO / PTT_FIN\npor WebSocket"]
-  D --> F["Graba con Web Audio\nWhisper WASM en Worker"]
-  E --> G["Whisper small\n244 MB en CPU"]
-  F --> H["Whisper small INT8\n125 MB en browser"]
-  G --> I[/"voz: {texto, comando}"/]
-  H --> J[/"comando: {comando}"/]
-```
-
-**Preferido — Whisper local en Python:**
-
-- Python captura el micrófono del sistema directamente con `sounddevice`
-- El browser **NO** necesita permisos de micrófono
-- Browser envía `PTT_INICIO` / `PTT_FIN` al presionar/soltar el botón o barra espaciadora
-- Python graba, transcribe con `openai-whisper` (modelo `small`) y devuelve texto+comando
-
-**Fallback — Whisper WASM en browser:**
-
-- Solo se activa si Python no tiene Whisper instalado
-- El browser descarga el modelo (`onnx-community/whisper-small`, \~125 MB, se cachea)
-- El browser captura el micrófono con Web Audio API (modo PTT)
-
-### Flujo PTT completo (Whisper local)
-
-```mermaid
-sequenceDiagram
-  participant U as Usuario
-  participant B as Browser
-  participant P as Python ws_server
-  participant J as juego_sim.py
-
-  U->>B: Presiona ESPACIO / botón 🎤
-  B->>P: {"tipo":"control","accion":"PTT_INICIO"}
-  P->>J: pausar_timeout()
-  P->>P: sounddevice.InputStream.start()
-
-  U->>B: Suelta botón
-  B->>P: {"tipo":"control","accion":"PTT_FIN"}
-  P->>P: sounddevice stop → numpy array
-  P->>P: whisper.transcribe(audio) → "rojo"
-  P->>J: reanudar_timeout()
-  P->>J: procesar_comando("ROJO")
-  P->>B: {"tipo":"voz","texto":"rojo","comando":"ROJO"}
-```
-
-### Narrador TTS
-
-```mermaid
-flowchart TD
-  E[Evento del juego] --> T{¿edge-tts\n+ pygame\ndisponibles?}
-  T -- Sí --> ET["edge-tts\nes-MX-DaliaNeural\n(voz neural mexicana)"]
-  T -- No --> S{¿hay voz\nespañol SAPI?}
-  S -- Sí --> SAPI["PowerShell SAPI\n(Sabina / Helena)"]
-  S -- No --> EN["PowerShell SAPI\n(voz en inglés)"]
-  ET -->|falla/sin internet| SAPI
-```
-
-**Eventos narrados:**
-
-- Conexión: bienvenida + instrucciones ("presiona el botón y di empieza")
-- SHOWING: "Mira y escucha." + nombre de cada color al mostrarlo
-- LISTENING: "Tu turno. Presiona el botón para hablar."
-- CORRECT: "Correcto."
-- LEVEL\_UP: "Nivel N."
-- WRONG: "Incorrecto. Di empieza para intentar de nuevo."
-- TIMEOUT: "Tiempo agotado. Di empieza para intentar de nuevo."
-- GAME\_OVER: "Fin del juego. Obtuviste N puntos. Di empieza para volver a jugar."
-
-***
-
-## Modo ESP32 — Producción
-
-El modo definitivo. Hardware: kit **MRD085A** (ESP32-S3-N16R8 + INMP441 + MAX98357A + OLED + botones SW1/SW2).
-Requiere: kit + cable USB + Chrome o Edge. Python es **opcional** (mayor precisión con `servidor_voz.py`).
-
-> Ver diagramas detallados:
-> - [diagrama_hardware_esp32.md](diagrama_hardware_esp32.md) — conexiones físicas del kit
-> - [diagrama_flujo_esp32.md](diagrama_flujo_esp32.md) — flujo completo paso a paso (92 pasos)
-
-### Modos de PTT — tres opciones
-
-| Modo | Quién captura audio | Quién transcribe | Cuándo usar |
-|---|---|---|---|
-| **Modo A** — botón físico SW1/SW2 | INMP441 → PSRAM → Serial base64 | servidor_voz.py (Whisper Python) | Mayor precisión, Python corriendo |
-| **Modo B** — teclado (barra espaciadora) | PC mic vía sounddevice (Python) | servidor_voz.py (Whisper Python) | Sin querer usar los botones físicos |
-| **Modo C** — teclado sin servidor | Browser mic vía getUserMedia | Whisper WASM (Web Worker) | Sin Python, solo kit + cable USB |
-
-### Cómo funciona — paso a paso (Modo A con botón físico)
-
-```mermaid
-sequenceDiagram
-  participant U as Usuario
-  participant SW as SW1/SW2 (GPIO)
-  participant E as ESP32-S3
-  participant B as Browser (Chrome/Edge)
-  participant V as servidor_voz.py :8766
-
-  Note over U,E: Conectar hardware
-  U->>B: Click "Conectar al ESP32"
-  B->>E: Web Serial API — abre puerto 921600 baud
-  E-->>B: "READY\n"
-  E-->>B: "STATE:IDLE\n"
-
-  Note over U,E: Iniciar juego con teclado
-  U->>B: Presiona ESPACIO + dice "empieza"
-  B->>V: {tipo:control, accion:PTT_INICIO}
-  V->>V: sounddevice.InputStream.start()
-  U->>B: Suelta ESPACIO
-  B->>V: {tipo:control, accion:PTT_FIN}
-  V->>V: Whisper transcribe → "START"
-  V-->>B: {tipo:voz, texto:"empieza", comando:"START"}
-  B->>E: "START\n" (921600 baud)
-  E-->>B: "STATE:SHOWING\n"
-
-  Note over U,E: Turno con botón físico
-  U->>SW: Presiona SW1 (Volumen+)
-  SW->>E: GPIO0 flanco bajada
-  E->>E: pausarTimeout() + audioCapturaIniciar()
-  E-->>B: "BTN_INICIO\n"
-  U->>U: dice "rojo"
-  U->>SW: Suelta SW1
-  SW->>E: GPIO0 flanco subida
-  E->>E: audioCapturaPararYEnviar()
-  E-->>B: "AUDIO:START:64000\n[base64...]\nAUDIO:END\n"
-  B->>V: {tipo:audio_float32, datos:[...]}
-  V->>V: Whisper transcribe → "ROJO"
-  V-->>B: {tipo:voz, texto:"rojo", comando:"ROJO"}
-  B->>E: "PTT_FIN\n" + "ROJO\n"
-  E->>E: reanudarTimeout()
-  E-->>B: "RESULT:CORRECT\n"
-  E-->>B: "LEVEL:2\n"
-```
-
-### Diagrama de comunicación Serial
-
-```mermaid
-flowchart LR
-  subgraph BROWSER["Chrome / Edge"]
-    WS2["useWebSerial.ts"]
-    WASM2["Whisper WASM\nWeb Worker (fallback)"]
-    WS_VZ["WebSocket :8766\nservidor_voz.py"]
-    VAL2["validador.ts"]
-    WS2 -->|"Lee líneas\ntexto plano"| PARSE["Parsear mensajes\nESP32→browser"]
-    WASM2 -->|"texto transcrito"| VAL2 -->|"ROJO / VERDE..."| WS2
-    WS_VZ -->|"voz:{comando}"| WS2
-  end
-  subgraph KIT["Kit MRD085A (sin LEDs físicos)"]
-    FW2["simon_dice.ino"]
-    GM["game_engine.cpp"]
-    LC["led_control.cpp\nLEDs virtuales via Serial"]
-    SC["sound_control.cpp\nI2S MAX98357A"]
-    BT["botones.cpp\nSW1/SW2 PTT"]
-    OL["oled_display.cpp\nSSD1306 OLED"]
-    FW2 --> GM --> LC & SC & OL
-    BT --> FW2
-  end
-  WS2 <-->|"USB Serial\n921600 baud\ntexto plano + base64 audio"| FW2
-```
-
-### Mensajes del protocolo Serial
-
-**ESP32 → browser:**
+Simon Dice por Voz es un juego clásico de memoria controlado completamente por voz en español. El jugador escucha una secuencia de colores y debe repetirlos en orden usando solo su voz.
 
 ```
-READY               sistema inicializado
-STATE:IDLE          esperando inicio
-STATE:SHOWING       mostrando secuencia de LEDs
-STATE:LISTENING     esperando respuesta del jugador
-STATE:EVALUATING    procesando respuesta
-STATE:GAMEOVER      fin del juego
-STATE:PAUSA         juego pausado
-LED:ROJO            LED rojo encendido
-LED:OFF             LEDs apagados
-RESULT:CORRECT      respuesta correcta
-RESULT:WRONG        respuesta incorrecta
-RESULT:TIMEOUT      no habló a tiempo
-SEQUENCE:ROJO,AZUL  secuencia completa del nivel
-EXPECTED:VERDE      color esperado en este turno
-LEVEL:3             nivel actual
-SCORE:30            puntuación actual
-BTN_INICIO          botón físico SW1/SW2 presionado (inicia captura INMP441)
-AUDIO:START:N       inicio de transmisión de audio (N = número de muestras)
-<base64 líneas>     líneas de 60 chars base64 (45 bytes raw por línea)
-AUDIO:END           fin de transmisión de audio
-AUDIO:VACIO         botón soltado sin capturar audio suficiente
+┌──────────────────────────────────────────────────────────────┐
+│  ESP32-S3  (firmware/proyecto/proyecto.ino)                  │
+│  • MAX4466: captura audio del jugador (ADC 8kHz)             │
+│  • RGB WS2812B: muestra el color activo de la secuencia      │
+│  • OLED SSD1306: muestra estado del juego                    │
+│  • Botón GPIO0 (SW1): Push-To-Talk físico                    │
+└──────────────────┬───────────────────────────────────────────┘
+                   │ USB Serial 921600 baud
+                   │ (audio PCM + comandos de texto)
+┌──────────────────▼───────────────────────────────────────────┐
+│  Python  (servidor_pc/servidor.py)                           │
+│  • serial_bridge.py  → lee/escribe Serial del ESP32          │
+│  • whisper_engine.py → pipeline audio + Whisper small        │
+│  • juego_sim.py      → máquina de estados del juego          │
+│  • ws_server.py      → WebSocket :8765 → panel web           │
+│  • tts.py            → narrador TTS + tonos (laptop)         │
+└──────────────────┬───────────────────────────────────────────┘
+                   │ WebSocket ws://localhost:8765
+┌──────────────────▼───────────────────────────────────────────┐
+│  Next.js  (web-panel/)                                       │
+│  • Muestra LEDs, secuencia, nivel, puntuación                │
+│  • Log en tiempo real de todos los eventos                   │
+│  • PTT por barra espaciadora → panel → WS → Python           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**browser → ESP32:**
+**Principio de diseño clave:** El ESP32 es solo hardware. La lógica del juego vive en Python, lo que simplifica enormemente el firmware y permite iterar sin reflachar.
+
+---
+
+## 2. Hardware
+
+### Pines (YD-ESP32-S3)
+
+| Componente | Pin | Notas |
+|---|---|---|
+| MAX4466 OUT | GPIO4 (ADC1_CH3) | Micrófono analógico |
+| OLED SDA | GPIO10 | I2C datos |
+| OLED SCL | GPIO11 | I2C reloj |
+| RGB WS2812B | GPIO48 | LED integrado en la placa |
+| Botón PTT | GPIO0 (BOOT) | Activo LOW, pull-up interno |
+
+### Configuración Arduino IDE
 
 ```
-ROJO\n              comando de color reconocido
-START\n STOP\n etc  comandos de control
-DESCONOCIDO\n       no se entendió
-PTT_INICIO\n        teclado presionado (pausa timeout)
-PTT_FIN\n           teclado soltado (reanuda timeout)
+Board:            ESP32S3 Dev Module
+PSRAM:            OPI PSRAM
+Flash Size:       16MB (128Mb)
+USB CDC on Boot:  Enabled
+Upload Speed:     921600
 ```
 
-***
+### MAX4466 — Micrófono analógico
 
-## Máquina de estados del juego
+- Salida: señal AC centrada en VCC/2 (~1.65V)
+- Ganancia: ajustable con potenciómetro (máximo recomendado)
+- ADC del ESP32: 12-bit (0–4095), referencia 3.3V
+- El bias de 1.65V se elimina en firmware restando 2048 a cada muestra
 
-```mermaid
-stateDiagram-v2
-  [*] --> IDLE
+---
 
-  IDLE --> SHOWING_SEQUENCE : START
+## 3. Firmware (ESP32)
 
-  SHOWING_SEQUENCE --> LISTENING : secuencia mostrada
+### Lo que hace
 
-  LISTENING --> EVALUATING : PTT_FIN (audio capturado)
-  LISTENING --> LISTENING : REPITE
-  LISTENING --> PAUSA : PAUSA
-  LISTENING --> GAME_OVER : TIMEOUT
+El firmware maneja únicamente hardware:
 
-  PAUSA --> LISTENING : START / REPITE
+1. Detecta PTT (botón físico GPIO0 o comando Serial 'R')
+2. Captura audio del MAX4466 a 8kHz con filtros digitales biquad
+3. Almacena en PSRAM (hasta 10s = 160KB)
+4. Envía los bytes de audio al PC por Serial
+5. Recibe comandos del PC y los ejecuta (LED, OLED)
 
-  EVALUATING --> CORRECT : respuesta correcta
-  EVALUATING --> WRONG : respuesta incorrecta
+### Por qué OVERSAMPLE=2 y no 4
 
-  CORRECT --> LEVEL_UP : fin de secuencia
-  CORRECT --> LISTENING : siguiente color
+Con `analogRead()` en ESP32-S3 cada lectura tarda ~40µs. A 8kHz el intervalo entre muestras es 125µs:
 
-  LEVEL_UP --> SHOWING_SEQUENCE : secuencia + 1
+- `OVERSAMPLE=4`: 4 × 40µs = 160µs **>** 125µs → se supera el intervalo → tasa real ~6250Hz declarada como 8kHz → audio 1.28× acelerado = **efecto ardilla**
+- `OVERSAMPLE=2`: 2 × 40µs = 80µs **<** 125µs → 45µs de margen → timing exacto, sin distorsión
 
-  WRONG --> GAME_OVER
-  GAME_OVER --> IDLE : START / REINICIAR
+### Filtros biquad en firmware
+
+Butterworth 2do orden, Direct Form I, Fs=8kHz:
+
+```
+HPF @ 80Hz — elimina DC bias y vibraciones bajas
+  B0= 0.9566  B1=-1.9131  B2= 0.9566
+  A1=-1.9112  A2= 0.9150
+
+LPF @ 3400Hz — banda de voz telefónica
+  B0= 0.7158  B1= 1.4316  B2= 0.7158
+  A1= 1.3490  A2= 0.5141
 ```
 
-***
+### Protocolo Serial (ESP32 ↔ PC)
 
-## IA — Whisper
+**ESP32 → PC:**
 
-| <br />               | Whisper local (Python)     | Whisper WASM (browser)           |
-| -------------------- | -------------------------- | -------------------------------- |
-| Librería             | `openai-whisper`           | `@huggingface/transformers` v3   |
-| Modelo               | `small` (244 MB)           | `small` cuantizado INT8 (125 MB) |
-| Micrófono            | Python `sounddevice`       | Web Audio API                    |
-| Permisos mic browser | No necesita                | Sí                               |
-| Latencia (CPU)       | 2–8 s                      | 1–3 s                            |
-| Caché                | carpeta `~/.cache/whisper` | IndexedDB del browser            |
-| Disponible en        | Solo simulador PC          | Simulador (fallback) + ESP32     |
+| Mensaje | Significado |
+|---|---|
+| `READY` | Firmware inicializado |
+| `PTT_START` | Grabación iniciada |
+| `PTT_STOP` | Grabación detenida |
+| `AUDIO_CORTO` | Grabación < 0.25s, descartada |
+| `AUDIO_START:N` | Vienen N bytes PCM int16 LE 8kHz |
+| `AUDIO_END` | Fin del paquete |
 
-***
+**PC → ESP32:**
 
-## Componentes UI — Web Panel
+| Mensaje | Significado |
+|---|---|
+| `R` | Iniciar grabación remota (spacebar) |
+| `T` | Detener grabación remota |
+| `LED:ROJO` / `LED:OFF` | Color del LED activo |
+| `OLED:l1\|l2\|l3` | Texto en OLED (3 líneas) |
 
-El dashboard principal (`page.tsx`) ensambla los siguientes componentes:
+---
 
-| Componente          | Descripción                                                                                                                  |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **ConnectionPanel** | Toggle de modo (WebSocket / Serial), botón PTT con indicador de estado, información del dispositivo detectado, botón conectar |
-| **LEDPanel**        | Visualización de los 4 LEDs de colores (Rojo, Verde, Azul, Amarillo) que refleja el estado de los LEDs físicos o simulados  |
-| **GameStatus**      | Badge del estado actual del juego, última detección de voz, y pista de uso del PTT                                          |
-| **ScoreBoard**      | Nivel y puntuación actuales con animación de números al actualizarse                                                         |
-| **SequenceDisplay** | Secuencia de pasos compacta (cajas de color w-6 h-6), muestra la secuencia completa del nivel actual                        |
-| **LogConsole**      | Log en tiempo real de todos los eventos, los más nuevos al fondo con auto-scroll, filtrable por tipo de mensaje              |
-| **TurnoTimer**      | Cuenta regresiva de 30 s durante el estado LISTENING (comienza después del retraso TTS de 3,5 s); muestra referencia de comandos de voz cuando está en reposo |
-| **SesionStats**     | Estadísticas de la sesión actual: mejor nivel, mejor puntuación, total de partidas y mejor racha, persistidas en memoria     |
-| **HowToPlay**       | Modal de ayuda con instrucciones del juego, lista de comandos de voz reconocidos y notas de compatibilidad del navegador     |
+## 4. Pipeline de limpieza de audio (Python)
 
-***
+El audio del ESP32 tiene ruido residual del ADC. El servidor aplica 5 capas antes de entregar a Whisper:
 
-## Estructura de carpetas
+```
+[bytes PCM int16 LE @ 8kHz del ESP32]
+  │
+  ▼ int16 → float32 normalizado [-1.0, 1.0]
+  │
+  ▼ HPF 80Hz — scipy filtfilt (fase cero, sin distorsión)
+  │   Elimina DC residual
+  │
+  ▼ LPF 3400Hz — scipy filtfilt (fase cero)
+  │   Refuerza corte de alta frecuencia
+  │
+  ▼ noisereduce estatcionario
+  │   prop_decrease=0.55 (reducir 55% del ruido)
+  │   ⚠ NO usar >0.70: borra consonantes Z,K,R,S,CH
+  │     → Whisper alucina ("¡Draje!", "¡Ni una ni una!")
+  │
+  ▼ Normalización al 90% del pico
+  │   Maximiza SNR sin saturar
+  │
+  ▼ Resample 8kHz → 16kHz (scipy.signal.resample)
+  │   Whisper requiere exactamente 16kHz
+
+[np.ndarray float32 @ 16kHz] → Whisper
+```
+
+### Por qué prop_decrease=0.55 y no 0.80
+
+Con 0.80 el filtro borraba las componentes espectrales de las consonantes fricativas:
+
+- **Z** ("AZUL"): energía en ~3-5kHz → desaparecía → Whisper confundía con otra cosa
+- **K** ("IZQUIERDA"): igual
+- **S/CH** ("REINICIAR", "DERECHA"): igual
+
+Con 0.55 se preserva suficiente espectro consonántico. El ruido residual no afecta tanto a Whisper como la falta de información.
+
+---
+
+## 5. Reconocimiento de voz — Whisper
+
+### Qué es Whisper
+
+Modelo de reconocimiento de voz de OpenAI entrenado con 680,000 horas de audio. Se ejecuta **localmente** (sin internet, sin API key, completamente gratis).
+
+- **Modelo:** `small` (~244MB) — mejor balance calidad/velocidad en CPU
+- **Tiempo:** 3-8s en CPU i5/i7
+- **Idioma:** forzado a español (`language="es"`)
+
+### Parámetros clave de transcripción
+
+| Parámetro | Valor | Por qué |
+|---|---|---|
+| `temperature` | `0.0` | Determinístico — sin aleatoriedad en la elección |
+| `no_speech_threshold` | `0.5` | Ignora segmentos de silencio/ruido |
+| `logprob_threshold` | `-0.8` | Descarta transcripciones de baja confianza |
+| `initial_prompt` | vocabulario | Guía al decoder hacia nuestras palabras |
+| `beam_size` | `5` | Explora 5 hipótesis simultáneas antes de elegir |
+
+### initial_prompt — cómo funciona
+
+Whisper usa el prompt como "contexto previo de la conversación". Al listar el vocabulario, el decoder asigna mayor probabilidad a esas tokens durante beam search:
+
+```
+"Juego Simon Dice. El jugador dice exactamente UNA palabra:
+rojo, verde, azul, amarillo, start, stop, pausa, repite...
+Ejemplos: 'a-sul' es azul. 'ro-jo' es rojo..."
+```
+
+### ¿Se puede entrenar Whisper para este proyecto?
+
+**Fine-tuning de Whisper:**
+- Técnicamente posible, pero requiere GPU NVIDIA para entrenar (días en CPU)
+- Necesita ~100-500 ejemplos por palabra
+- El `initial_prompt` + tabla VARIANTES logra ~90% del beneficio sin entrenar
+
+**Para Fase 2 (Edge Impulse):** se graban ~50 muestras por palabra y se entrena un modelo MFCC/red neuronal mucho más pequeño (~150KB) que corre en el ESP32 sin PC. Ese sí es el entrenamiento con datos propios.
+
+### Validador — 4 pasos
+
+```
+Texto Whisper: "asul"
+  │
+  ▼ Paso 1: coincidencia exacta en vocabulario canónico
+  │         "ASUL" no está → siguiente
+  │
+  ▼ Paso 2: frases de dos palabras ("otra vez" → REPITE)
+  │         No aplica → siguiente
+  │
+  ▼ Paso 3: tabla VARIANTES (variantes fonéticas/naturales)
+  │         "ASUL" está en VARIANTES["AZUL"] → ✓ AZUL
+  │
+  ▼ Paso 4: fuzzy matching (SequenceMatcher, umbral 0.70-0.82)
+            Para variantes no previstas en la tabla
+
+→ Resultado: "AZUL"
+```
+
+---
+
+## 6. Lógica del juego
+
+```
+IDLE
+  │  START (di "empieza")
+  ▼
+SHOWING_SEQUENCE  ← LEDs + TTS uno a uno
+  │
+  ▼
+LISTENING         ← timer 30s, espera PTT del jugador
+  │
+  ▼
+EVALUATING        ← timer pausado durante Whisper (~5s)
+  │
+  ├─ CORRECTO + fin secuencia  → CORRECT → LEVEL_UP → SHOWING_SEQUENCE
+  ├─ CORRECTO + incompleta    → CORRECT → LISTENING (siguiente color)
+  ├─ INCORRECTO               → WRONG → GAME_OVER
+  └─ TIMEOUT                  → GAME_OVER
+
+LISTENING → PAUSA (di "pausa")
+PAUSA → LISTENING (di "empieza")
+LISTENING → LISTENING (di "repite")
+```
+
+**Puntuación:** acierto de secuencia completa = `nivel_actual × 10 puntos`
+
+### Por qué el timer se pausa durante Whisper
+
+Sin la pausa, Whisper tarda 3-8s y ese tiempo se descuenta del timeout del jugador. Con la pausa, el timer solo cuenta el tiempo real que el jugador tarda en responder — no el tiempo de la máquina.
+
+---
+
+## 7. Protocolo WebSocket
+
+**Servidor → Panel:**
+```json
+{"tipo": "ready"}
+{"tipo": "state",    "estado": "LISTENING"}
+{"tipo": "led",      "color": "ROJO"}
+{"tipo": "sequence", "secuencia": ["ROJO","VERDE"]}
+{"tipo": "expected", "esperado": "VERDE"}
+{"tipo": "level",    "nivel": 3}
+{"tipo": "score",    "puntuacion": 30}
+{"tipo": "result",   "resultado": "CORRECT"}
+{"tipo": "voz",      "texto": "rojo", "comando": "ROJO"}
+{"tipo": "gameover"}
+{"tipo": "log",      "mensaje": "..."}
+```
+
+**Panel → Servidor:**
+```json
+{"tipo": "control", "accion": "PTT_INICIO"}
+{"tipo": "control", "accion": "PTT_FIN"}
+{"tipo": "comando", "comando": "ROJO"}
+```
+
+---
+
+## 8. Cómo instalar y correr
+
+### Instalación
+
+```bash
+# Dependencias Python
+cd servidor_pc
+pip install -r requirements.txt
+
+# Panel web
+cd ../web-panel
+npm install
+```
+
+### Flashear firmware
+
+1. Abrir `firmware/proyecto/proyecto.ino` en Arduino IDE
+2. Board: `ESP32S3 Dev Module` | PSRAM: `OPI PSRAM` | Flash: `16MB`
+3. USB CDC on Boot: `Enabled`
+4. Subir (→)
+
+### Correr el juego
+
+```bash
+# Terminal 1
+cd servidor_pc
+python servidor.py
+
+# Terminal 2
+cd web-panel
+npm run dev
+```
+
+Abrir **Chrome o Edge** en `http://localhost:3000`:
+
+1. Seleccionar **"Simulador — WebSocket"**
+2. Clic en **Conectar**
+3. Presionar **ESPACIO** (o botón SW1) y decir **"empieza"**
+
+### Cambiar puerto Serial si auto-detect falla
+
+```python
+# servidor_pc/config.py
+SERIAL_PORT = "COM4"          # Windows
+# SERIAL_PORT = "/dev/ttyUSB0"  # Linux/macOS
+```
+
+---
+
+## 9. Estructura de archivos
 
 ```
 sistemas-inteligentes/
+├── firmware/
+│   ├── test_hardware/           ← Tests de desarrollo (ya no se usan)
+│   └── proyecto/
+│       └── proyecto.ino         ← FIRMWARE PRINCIPAL
 │
-├── firmware/                C++ Arduino — corre en el ESP32-S3 (Kit MRD085A)
-│   ├── simon_dice.ino       entry point, setup() y loop()
-│   ├── vocabulario.h        ÚNICA fuente del vocabulario de comandos
-│   ├── game_engine.h/cpp    máquina de estados (TIMEOUT_RESPUESTA=15000ms)
-│   ├── led_control.h/cpp    control de los 4 LEDs físicos
-│   ├── sound_control.h/cpp  tonos I2S por speaker MAX98357A
-│   ├── audio_capture.h/cpp  captura PTT INMP441 → PSRAM → base64 Serial
-│   ├── serial_comm.h/cpp    protocolo de texto por USB Serial (921600 baud)
-│   ├── oled_display.h/cpp   display SSD1306 0.91" I2C (estado + nivel + pts)
-│   └── botones.h/cpp        SW1/SW2 como PTT físico (GPIO0/GPIO35)
-│
-├── servidor_voz/            Python — servidor de voz solo (sin lógica de juego)
-│   ├── main.py              WebSocket :8766, Whisper Python, PTT mic PC + audio base64
-│   ├── config_voz.py        WS_PORT, WHISPER_MODEL, SAMPLE_RATE
-│   └── requirements.txt     sounddevice, numpy, websockets, openai-whisper
+├── servidor_pc/                 ← SERVIDOR PYTHON
+│   ├── servidor.py              ← Entry point: conecta todo
+│   ├── serial_bridge.py         ← ESP32 Serial ↔ juego
+│   ├── whisper_engine.py        ← Pipeline audio + Whisper
+│   ├── validador.py             ← Texto → comando
+│   ├── ws_server.py             ← WebSocket :8765
+│   ├── tts.py                   ← Narrador + tonos
+│   ├── config.py                ← Configuración
+│   └── requirements.txt
 │
 ├── tests/
-│   └── simulador_pc/
-│       ├── main.py          entry point: juego + WebSocket + hilos
-│       ├── juego_sim.py     lógica del juego (espejo de game_engine.cpp)
-│       ├── audio_pc.py      sounddevice (tonos + mic PTT) + edge-tts/SAPI
-│       ├── leds_sim.py      LEDs simulados en terminal (ANSI)
-│       ├── ws_server.py     WebSocket ↔ panel; READY con info dispositivos
-│       ├── validador.py     normaliza texto → comando
-│       ├── config_test.py   WHISPER_MODEL, TIMEOUT_RESPUESTA, SAMPLE_RATE
-│       └── requirements_test.txt
+│   └── simulador_pc/            ← Simulador sin ESP32
+│       └── juego_sim.py         ← Reutilizado por servidor.py
 │
-├── web-panel/               Next.js 14 + TypeScript
-│   ├── app/
-│   │   ├── page.tsx         dashboard principal
-│   │   └── components/      GameStatus, LEDPanel, SequenceDisplay,
-│   │                        LogConsole, ScoreBoard, ConnectionPanel,
-│   │                        TurnoTimer, SesionStats, HowToPlay
-│   ├── hooks/
-│   │   ├── useWebSocket.ts      modo simulador (WebSocket :8765)
-│   │   ├── useWebSerial.ts      modo ESP32 (Serial 921600 + WS :8766)
-│   │   └── useWhisperWASM.ts    Whisper WASM (fallback sin servidor)
-│   ├── workers/
-│   │   └── whisper.worker.ts    Web Worker con @huggingface/transformers
-│   ├── lib/
-│   │   └── validador.ts         texto → comando
-│   └── types/game.ts
+├── web-panel/                   ← Panel Next.js
 │
 └── docs/
-    ├── arquitectura.md              (este archivo)
-    ├── diagrama_arquitectura_completa.md  tres modos lado a lado
-    ├── diagrama_hardware_esp32.md   conexiones físicas kit MRD085A
-    ├── diagrama_flujo_esp32.md      flujo completo ESP32 (92 pasos)
-    ├── diagrama_opcion_c.md         flujo ESP32 + Whisper WASM sin Python
-    ├── diagrama_simulador_pc.md     flujo simulador PC
-    └── setup.md
+    └── arquitectura.md          ← Este archivo
 ```
 
-***
+---
 
-## Modos del panel
+## 10. Flujo completo de una jugada
 
-| Modo | Toggle | Cuándo usar | Python necesario |
-|---|---|---|---|
-| **Simulador — WebSocket** | "WebSocket" | `python main.py` corriendo en PC | Sí (obligatorio) |
-| **ESP32 + servidor_voz** | "Serial" | Kit MRD085A + `python servidor_voz/main.py` | Sí (mayor precisión) |
-| **ESP32 + WASM** | "Serial" | Kit MRD085A, sin Python instalado | No |
+```
+00:00  python servidor.py
+       → Carga Whisper 'small' (~5s cacheado)
+       → Conecta ESP32 por Serial → recibe READY
+       → WebSocket listo en :8765
+       → TTS: "Servidor listo..."
 
-> **PTT físico**: botones SW1/SW2 del kit → captura INMP441 → base64 → servidor_voz → Whisper
-> **PTT teclado**: barra espaciadora en browser → mic PC → servidor_voz (preferido) o WASM (fallback)
+00:10  Panel web conecta (Chrome localhost:3000)
+       → TTS: "Bienvenido a Simon Dice..."
 
+00:20  Jugador presiona ESPACIO
+       → Panel → WS: PTT_INICIO
+       → Python: pausar_timeout() + Serial 'R' al ESP32
+       → ESP32: graba, RGB rojo, OLED "GRABANDO..."
+       → Serial → Python: "PTT_START"
+
+00:22  Jugador dice "empieza" y suelta ESPACIO
+       → Panel → WS: PTT_FIN
+       → Python: Serial 'T' al ESP32
+       → ESP32: para, RGB azul, OLED "Procesando..."
+       → Serial → Python: "PTT_STOP" + "AUDIO_START:15200" + bytes + "AUDIO_END"
+
+00:22  Whisper: "empieza" → validador → START
+       → juego.reanudar_timeout()
+       → juego.procesar_comando("START")
+
+00:23  Estado: SHOWING_SEQUENCE
+       → TTS: "Mira y escucha."
+       → Serial: "LED:ROJO" → ESP32 RGB rojo
+       → TTS: "Rojo."
+       → Serial: "LED:OFF"
+       → Estado: LISTENING
+
+00:26  Jugador presiona ESPACIO + dice "rojo"
+       → [mismo flujo PTT]
+       → Whisper: "rojo" → ROJO
+       → Evaluación: CORRECTO, secuencia completa
+       → Puntuación +10, nivel 2
+       → TTS: "Correcto. Nivel 2."
+       → Muestra secuencia [ROJO, VERDE]...
+```
+
+---
+
+## 11. Problemas frecuentes
+
+| Síntoma | Causa | Solución |
+|---|---|---|
+| ESP32 no detectado | Driver faltante | Instalar CH340 o CP210x |
+| ESP32 no detectado | Serial Monitor abierto | Cerrar Arduino IDE |
+| Voz de ardilla | OVERSAMPLE=4 en firmware | Cambiar a OVERSAMPLE=2 |
+| Alucinaciones Whisper | prop_decrease muy alto | Mantener en 0.55 |
+| AZUL no reconocido | Palabra corta | Ya en tabla VARIANTES + fuzzy |
+| TTS no habla | Sin voz española | Instalar voz "Paulina/Jorge" en Windows |
+| Panel no conecta | Puerto 8765 libre | Verificar que servidor.py esté corriendo |
+| Panel no conecta | Firefox/Safari | Usar Chrome o Edge |
+| Sin buffer de audio | PSRAM no habilitada | Board settings: OPI PSRAM |
