@@ -35,11 +35,12 @@ class ServidorWS:
         self._listo   = threading.Event()
 
         # ── Callbacks (asignar desde servidor.py) ────────────────────────────
-        self.on_ptt_inicio        = None   # ()  → serial_bridge.iniciar_ptt_remoto
-        self.on_ptt_fin           = None   # ()  → serial_bridge.detener_ptt_remoto
-        self.on_pausar_timeout    = None   # ()  → juego.pausar_timeout (previene race condition)
-        self.on_comando           = None   # (str) → fallback WASM: panel mandó texto directo
-        self.on_cliente_conectado = None   # ()  → bienvenida TTS
+        self.on_ptt_inicio           = None   # ()    → _iniciar_ptt_con_check
+        self.on_ptt_fin              = None   # ()    → serial_bridge.detener_ptt_remoto
+        self.on_pausar_timeout       = None   # ()    → juego.pausar_timeout (previene race condition)
+        self.on_comando              = None   # (str) → fallback WASM: panel mandó texto directo
+        self.on_cliente_conectado    = None   # ()    → bienvenida TTS
+        self.on_todos_desconectados  = None   # ()    → cancelar TTS al quedar sin clientes
 
     # ── Arranque ──────────────────────────────────────────────────────────────
 
@@ -158,6 +159,12 @@ class ServidorWS:
             self._clientes.discard(websocket)
             if DEBUG:
                 print(f"[WS] Cliente desconectado. Total: {len(self._clientes)}")
+            if not self._clientes and self.on_todos_desconectados:
+                threading.Thread(
+                    target=self.on_todos_desconectados,
+                    daemon=True,
+                    name="todos-desc",
+                ).start()
 
     # ── Broadcast loop ────────────────────────────────────────────────────────
 

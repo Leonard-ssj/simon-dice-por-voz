@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from config import DEBUG
 from tts import (
     inicializar_tts, esperar_tts,
-    decir, decir_color, reproducir_sonido,
+    decir, decir_color, reproducir_sonido, tts_hablando, cancelar_tts,
 )
 from ws_server     import ServidorWS
 from serial_bridge import SerialBridge
@@ -48,8 +48,17 @@ from juego_sim import JuegoSimulador, Estado
 
 
 # ─── Instancias globales ──────────────────────────────────────────────────────
-from config import TIMEOUT_RESPUESTA as _TIMEOUT_MS
-juego   = JuegoSimulador(timeout_ms=_TIMEOUT_MS)  # usa config.py (60s), no config_test.py (30s)
+from config import (
+    TIMEOUT_RESPUESTA as _TIMEOUT_MS,
+    DURACION_LED_SIM  as _LED_MS,
+    PAUSA_ENTRE_LEDS  as _PAUSA_MS,
+    WHISPER_TIMEOUT   as _WHISPER_TIMEOUT_S,
+)
+juego   = JuegoSimulador(
+    timeout_ms=_TIMEOUT_MS,         # 60s — config.py, no config_test.py (30s)
+    duracion_led_ms=_LED_MS,        # 800ms — evita importar de config_test.py
+    pausa_leds_ms=_PAUSA_MS,        # 300ms
+)
 ws      = ServidorWS()
 serial  = SerialBridge()
 whisper = WhisperEngine()
@@ -112,23 +121,20 @@ def _on_estado(estado: Estado):
     oled = _OLED_ESTADO.get(estado, (estado.value, "", ""))
     serial.enviar_oled(*oled)
 
-    # Narración TTS por estado — _reservar_ventana_tts() bloquea el PTT
-    # durante la narración para que el MAX4466 no capture la voz del narrador.
+    # Narración TTS por estado.
+    # tts_hablando() es el mecanismo que bloquea el PTT durante la narración —
+    # no necesitamos estimar la duración manualmente.
     if estado == Estado.SHOWING_SEQUENCE:
-        _reservar_ventana_tts("Mira y escucha.")
         decir("Mira y escucha.", bloquear=False)
 
     elif estado == Estado.LISTENING:
-        _reservar_ventana_tts("Tu turno. Presiona ESPACIO para hablar.")
         decir("Tu turno. Presiona ESPACIO para hablar.", bloquear=False)
 
     elif estado == Estado.PAUSA:
-        _reservar_ventana_tts("Juego pausado.")
         decir("Juego pausado.", bloquear=False)
 
     elif estado == Estado.GAME_OVER:
         pts = juego.puntuacion
-        _reservar_ventana_tts(f"Fin del juego. Obtuviste {pts} puntos. Di empieza para volver a jugar.")
 
         def _narrar():
             time.sleep(0.3)
@@ -163,9 +169,7 @@ def _on_sonido(tipo: str, extra=None):
 
     if tipo == "color" and extra:
         # TTS del color (bloqueante — sincroniza con el LED visual).
-        # También reserva ventana: el nombre del color suena mientras el LED
-        # está encendido → el usuario no debería grabar en ese momento.
-        _reservar_ventana_tts(extra.lower(), extra_seg=1.5)
+        # _tts_activo queda SET mientras habla → tts_hablando() bloquea PTT automáticamente.
         decir_color(extra)
 
 
@@ -185,7 +189,6 @@ def _on_nivel(n: int):
     # OLED: nivel actual
     serial.enviar_oled(f"NIVEL {n}", "Bien hecho!", "")
     if n > 1:
-        _reservar_ventana_tts(f"Nivel {n}.")
         threading.Thread(
             target=lambda: decir(f"Nivel {n}.", bloquear=False),
             daemon=True,
@@ -203,24 +206,21 @@ def _on_resultado(r: str):
     ws.enviar_resultado(r)
 
     if r == "CORRECT":
-        _reservar_ventana_tts("Correcto.")
         decir("Correcto.", bloquear=False)
 
     elif r == "WRONG":
-        _reservar_ventana_tts("Incorrecto. Di empieza para intentar de nuevo.")
-        def _narrar():
+        def _narrar_wrong():
             time.sleep(0.2)
             decir("Incorrecto.", bloquear=False)
             decir("Di empieza para intentar de nuevo.", bloquear=False)
-        threading.Thread(target=_narrar, daemon=True).start()
+        threading.Thread(target=_narrar_wrong, daemon=True).start()
 
     elif r == "TIMEOUT":
-        _reservar_ventana_tts("Tiempo agotado. Di empieza para intentar de nuevo.")
-        def _narrar():
+        def _narrar_timeout():
             time.sleep(0.2)
             decir("Tiempo agotado.", bloquear=False)
             decir("Di empieza para intentar de nuevo.", bloquear=False)
-        threading.Thread(target=_narrar, daemon=True).start()
+        threading.Thread(target=_narrar_timeout, daemon=True).start()
 
 
 def _on_log(msg: str):
@@ -228,56 +228,28 @@ def _on_log(msg: str):
     ws.enviar_log(msg)
 
 
-_juego_iniciado        = False   # el juego arranca solo cuando el panel conecta por primera vez
-_ignorar_proximo_audio = False   # True si el PTT llegó antes del panel o durante ventana de boot
-_ignorar_ptt_hasta     = 0.0    # time.time() límite — ignora PTT durante ventana de boot
-_bloqueo_tts_hasta     = 0.0    # time.time() límite — ignora PTT mientras TTS está narrando
-_whisper_procesando    = False   # True mientras Whisper transcribe — el tick NO dispara timeout
-
-
-def _reservar_ventana_tts(texto: str, extra_seg: float = 2.5):
-    """
-    Registra que el TTS va a hablar 'texto' y bloquea el PTT durante
-    la duración estimada + margen.
-
-    Llámalo ANTES de decir() o del thread que va a hablar, para que
-    cualquier spacebar que el usuario pulse durante la narración sea ignorado
-    (el MAX4466 captaría la voz del narrador y Whisper lo transcribiría).
-
-    Fórmula: 0.5s por palabra + extra_seg de margen (latencia TTS + eco mic).
-    """
-    global _bloqueo_tts_hasta
-    palabras   = len(texto.split())
-    duracion   = palabras * 0.5 + extra_seg
-    nuevo_fin  = time.time() + duracion
-    if nuevo_fin > _bloqueo_tts_hasta:
-        _bloqueo_tts_hasta = nuevo_fin
+_juego_iniciado       = False   # el juego arranca solo cuando el panel conecta por primera vez
+_whisper_procesando   = False   # True mientras Whisper transcribe — el tick NO dispara timeout
+_whisper_hilo_activo: threading.Thread | None = None  # hilo Whisper activo — evita concurrencia
+_ptt_spacebar_activo  = False   # True SOLO cuando spacebar inició el PTT — descarta todo lo demás
 
 def _on_cliente_conectado():
     """
     Callback cuando el panel web abre la conexión WebSocket.
-
     La primera vez: inicializa el motor del juego y narra la bienvenida.
-    Reconexiones posteriores: solo narra bienvenida (el juego ya está corriendo).
-
-    Ventana de arranque: durante 10s post-conexión cualquier PTT del ESP32 se descarta.
-    Esto evita que la grabación de GPIO0 (que queda LOW en boot) capture la voz del TTS
-    o que una pulsación accidental durante la bienvenida procese audio con Whisper.
+    Reconexiones posteriores: solo narra bienvenida.
+    El guard de spacebar (_ptt_spacebar_activo) ya garantiza que ningún audio
+    del ESP32 se procese hasta que el usuario presione spacebar.
     """
-    global _juego_iniciado, _ignorar_ptt_hasta
-
-    # Activar ventana de 10s durante la cual se descartan PTT del ESP32.
-    # El MAX4466 capta la voz del TTS de la laptop — el usuario no ha dicho nada.
-    _ignorar_ptt_hasta = time.time() + 10.0
+    global _juego_iniciado
 
     if not _juego_iniciado:
         _juego_iniciado = True
         log("[Panel] Primer cliente conectado — iniciando juego", "sistema")
-        juego.iniciar()     # transiciona a IDLE y registra los callbacks de estado
+        juego.iniciar()
 
     time.sleep(0.5)
     log("[Panel] Cliente conectado — narrando bienvenida", "sistema")
-    _reservar_ventana_tts("Simon Dice listo. Presiona ESPACIO para comenzar.")
     decir("Simon Dice listo. Presiona ESPACIO para comenzar.", bloquear=False)
 
 
@@ -289,38 +261,56 @@ def _on_esp32_ready():
     serial.enviar_oled("Simon Dice", "Conectado al PC", "")
 
 
-def _on_ptt_start():
-    """ESP32 empezó a grabar (Serial 'R' — spacebar del panel)."""
-    global _ignorar_proximo_audio
-
-    # Caso A: sin panel conectado todavía
+def _verificar_condiciones_ptt() -> bool:
+    """
+    Comprueba si el PTT (spacebar) debe aceptarse en este momento.
+    Solo se llama desde _iniciar_ptt_con_check (spacebar).
+    Retorna True si está bien grabar, False si debe ignorarse.
+    """
     if not ws.hay_clientes():
-        _ignorar_proximo_audio = True
-        log("[PTT] Sin panel — grabación descartada (pre-conexión)", "sistema")
-        return
+        juego.reanudar_timeout()
+        log("[PTT] Sin panel — ignorado", "sistema")
+        return False
 
-    # Caso B: ventana de arranque — TTS de bienvenida puede estar sonando.
-    if time.time() < _ignorar_ptt_hasta:
-        _ignorar_proximo_audio = True
-        restante = round(_ignorar_ptt_hasta - time.time(), 1)
-        log(f"[PTT] Ignorado — ventana de arranque ({restante}s restantes)", "sistema")
-        return
-
-    # Caso C: TTS narrando — el MAX4466 captaría la voz del narrador.
-    # Si el usuario pulsa ESPACIO mientras la voz habla, el audio grabado
-    # contendría la narración y Whisper la transcribiría como comando.
-    if time.time() < _bloqueo_tts_hasta:
-        _ignorar_proximo_audio = True
-        restante = round(_bloqueo_tts_hasta - time.time(), 1)
-        log(f"[PTT] Ignorado — narrador hablando ({restante}s restantes)", "sistema")
-        ws.enviar_log(f"Espera {restante:.0f}s al narrador antes de hablar…")
+    if tts_hablando():
+        # NO reanudar_timeout() — _hilo_tick ya no avanza el timer mientras tts_hablando()
+        # El timer se reanudará solo cuando el narrador termine
+        log("[PTT] Ignorado — narrador hablando", "sistema")
+        ws.enviar_log("Espera al narrador antes de hablar…")
         serial.enviar_oled("Espera...", "Narrador", "hablando")
-        return
+        return False
 
-    _ignorar_proximo_audio = False
-    log("[PTT] Grabación iniciada", "voz")
-    juego.pausar_timeout()
+    if juego.estado == Estado.SHOWING_SEQUENCE:
+        juego.reanudar_timeout()
+        log("[PTT] Ignorado — mostrando secuencia", "sistema")
+        serial.enviar_oled("Espera...", "Mira la", "secuencia")
+        return False
+
+    return True
+
+
+def _iniciar_ptt_con_check():
+    """
+    Callback para ws.on_ptt_inicio (spacebar del panel).
+    Única vía autorizada para iniciar una grabación.
+    El ESP32 puede mandar PTT_START solo (botón físico, firmware de test en bucle),
+    pero ese audio NUNCA se procesa — solo se procesa si spacebar lo inició.
+    """
+    global _ptt_spacebar_activo
+    if not _verificar_condiciones_ptt():
+        # El panel ya puso rawGrabando=True al enviar PTT_INICIO.
+        # Como no vamos a grabar nada, enviamos "voz" vacío para que el panel
+        # limpie rawGrabando/rawProcesando antes de que llegue PTT_FIN.
+        ws.enviar_voz("", "DESCONOCIDO")
+        return
+    _ptt_spacebar_activo = True   # autorizar el próximo bloque de audio
+    log("[PTT] Grabación iniciada (spacebar)", "voz")
     ws.enviar_log("🔴 Grabando...")
+    serial.iniciar_ptt_remoto()
+
+
+def _on_ptt_start():
+    pass   # el audio se acepta/descarta en _on_audio_recibido según _ptt_spacebar_activo
 
 
 def _on_ptt_stop():
@@ -339,25 +329,33 @@ def _on_audio_recibido(pcm_bytes: bytes):
     Recibe los bytes PCM del ESP32 y los procesa con Whisper.
     Se ejecuta en un hilo separado (spawneado por serial_bridge).
     """
-    global _ignorar_proximo_audio, _whisper_procesando
+    global _whisper_procesando, _whisper_hilo_activo, _ptt_spacebar_activo
 
-    # Caso 1: audio capturado en ventana de boot/bienvenida/TTS — descartar silenciosamente
-    if _ignorar_proximo_audio:
-        _ignorar_proximo_audio = False
-        _whisper_procesando    = False
-        log("[Audio] Grabación descartada (boot / narrador / bienvenida)", "sistema")
-        juego.reanudar_timeout()
-        # Resetear OLED — el firmware lo dejó en "Procesando... espera..."
-        serial.enviar_oled("Simon Dice", "Di EMPIEZA", "para comenzar")
+    # Caso 0: audio NO iniciado por spacebar — descartar silenciosamente.
+    # El ESP32 puede mandar bloques en bucle (firmware de test, botón físico).
+    # No enviamos nada al panel porque nunca estuvo en estado "procesando".
+    if not _ptt_spacebar_activo:
+        if DEBUG:
+            log("[Audio] Descartado — no iniciado por spacebar", "sistema")
         return
 
-    # Caso 2: panel se desconectó justo antes de recibir el audio
+    _ptt_spacebar_activo = False   # consumir el token
+
+    # Caso 1: panel se desconectó justo antes de recibir el audio
     if not ws.hay_clientes():
         _whisper_procesando = False
         log("[Audio] Sin panel web conectado — audio ignorado", "sistema")
         juego.reanudar_timeout()
-        # Resetear OLED
         serial.enviar_oled("Simon Dice", "Conecta el panel", "web para jugar")
+        return
+
+    # Caso 3: Whisper aún está corriendo del turno anterior (timeout no lo mató).
+    # WhisperEngine no es thread-safe — evitar llamada concurrente.
+    if _whisper_hilo_activo is not None and _whisper_hilo_activo.is_alive():
+        log("[Audio] Whisper aún ocupado — audio descartado", "error")
+        ws.enviar_log("Whisper aún procesando — intenta de nuevo en un momento")
+        ws.enviar_voz("", "DESCONOCIDO")
+        juego.reanudar_timeout()
         return
 
     # Pausar el timer AQUÍ, no solo en PTT_START.
@@ -368,16 +366,34 @@ def _on_audio_recibido(pcm_bytes: bytes):
     juego.pausar_timeout()
 
     # Flag global: el hilo de tick no llama juego.tick() mientras Whisper procesa.
-    # Esto evita que el timeout expire si el estado LISTENING comenzó DURANTE la
-    # transcripción (ej: PTT pulsado en SHOWING, Whisper tarda 20s, LISTENING empieza
-    # y el timer lleva ventaja antes de que podamos pausarlo).
     _whisper_procesando = True
 
     duracion = len(pcm_bytes) / (8000 * 2)
     log(f"[Audio] Recibido {len(pcm_bytes)} bytes ({duracion:.1f}s)", "voz")
 
-    # Transcribir con Whisper (pipeline completo)
-    texto, comando = whisper.transcribir(pcm_bytes)
+    # Transcribir con Whisper — con timeout para evitar bloqueos largos.
+    _resultado = [None, None]
+
+    def _transcribir():
+        _resultado[0], _resultado[1] = whisper.transcribir(pcm_bytes)
+
+    hilo_whisper = threading.Thread(target=_transcribir, daemon=True, name="whisper-transcribe")
+    _whisper_hilo_activo = hilo_whisper
+    hilo_whisper.start()
+    hilo_whisper.join(timeout=_WHISPER_TIMEOUT_S)
+
+    if hilo_whisper.is_alive():
+        _whisper_procesando  = False
+        _whisper_hilo_activo = None   # liberar — el hilo daemon morirá solo; permite reintentar
+        juego.reanudar_timeout()
+        log(f"[Audio] Whisper tardó más de {_WHISPER_TIMEOUT_S}s — descartando", "error")
+        ws.enviar_log(f"Whisper tardó demasiado ({_WHISPER_TIMEOUT_S}s) — intenta de nuevo")
+        ws.enviar_voz("", "DESCONOCIDO")   # resetear panel
+        serial.enviar_oled("Intenta", "de nuevo", "")
+        return
+
+    texto   = _resultado[0] or ""
+    comando = _resultado[1] or "DESCONOCIDO"
 
     # Reanudar timer ANTES de procesar el comando y limpiar el flag global
     _whisper_procesando = False
@@ -388,11 +404,14 @@ def _on_audio_recibido(pcm_bytes: bytes):
 
     if texto:
         log(f'[Voz] Whisper: "{texto}" → {comando}', "voz")
-        # Mostrar en el log del panel para que el usuario vea qué captó Whisper
         ws.enviar_log(f'Whisper: "{texto}" → {comando}')
     else:
         log("[Voz] Whisper: sin habla detectada", "info")
         ws.enviar_log("Whisper: sin habla detectada (intenta de nuevo)")
+
+    # Cancelar TTS pendiente si el comando es REINICIAR o PARA
+    if comando in ("REINICIAR", "PARA"):
+        cancelar_tts()
 
     # Procesar en el motor del juego
     if comando != "DESCONOCIDO":
@@ -410,7 +429,15 @@ def _on_comando_panel(cmd: str):
     """Fallback WASM: el panel mandó el comando como texto."""
     log(f"[Panel/WASM] Comando: {cmd}", "voz")
     ws.enviar_log(f"Comando (WASM): {cmd}")
+    if cmd in ("REINICIAR", "PARA"):
+        cancelar_tts()
     juego.procesar_comando(cmd)
+
+
+def _on_todos_desconectados():
+    """Todos los clientes del panel se desconectaron — cancelar TTS activo."""
+    cancelar_tts()
+    log("[Panel] Todos los clientes desconectados — TTS cancelado", "sistema")
 
 
 # ─── Registro de callbacks ───────────────────────────────────────────────────
@@ -438,23 +465,41 @@ def _registrar_callbacks():
     serial.on_log            = _on_log
 
     # Panel web → servidor
-    ws.on_ptt_inicio        = serial.iniciar_ptt_remoto    # spacebar → 'R' al ESP32
-    ws.on_ptt_fin           = serial.detener_ptt_remoto    # soltar   → 'T' al ESP32
-    ws.on_pausar_timeout    = juego.pausar_timeout          # pre-pausa (evita race condition)
-    ws.on_comando           = _on_comando_panel             # fallback WASM
-    ws.on_cliente_conectado = _on_cliente_conectado
+    ws.on_ptt_inicio           = _iniciar_ptt_con_check     # pre-check → 'R' al ESP32 solo si OK
+    ws.on_ptt_fin              = serial.detener_ptt_remoto  # soltar   → 'T' al ESP32
+    ws.on_pausar_timeout       = juego.pausar_timeout        # pre-pausa (evita race condition)
+    ws.on_comando              = _on_comando_panel           # fallback WASM
+    ws.on_cliente_conectado    = _on_cliente_conectado
+    ws.on_todos_desconectados  = _on_todos_desconectados     # cancelar TTS al desconectar
 
 
 # ─── Hilo de tick (timeout del turno) ────────────────────────────────────────
 
+_tts_activo_prev = False   # estado TTS en el tick anterior — detecta transiciones
+
 def _hilo_tick():
     """
     Llama a juego.tick() cada 200ms para verificar timeout.
-    Se salta el tick si Whisper está procesando (_whisper_procesando=True):
-    el timeout del turno no debe expirar mientras el modelo está transcribiendo.
+
+    El timer NO avanza mientras Whisper transcribe o el narrador habla.
+    Cuando TTS EMPIEZA: llama pausar_timeout() para congelar el timer.
+    Cuando TTS TERMINA: llama reanudar_timeout() para reanudarlo correctamente,
+      descontando exactamente el tiempo que el narrador habló.
+    Esto garantiza que el usuario solo "pierde" tiempo cuando PUEDE hablar.
     """
+    global _tts_activo_prev
     while True:
-        if not _whisper_procesando:
+        tts_activo = tts_hablando()
+
+        # Detectar transición TTS inició / TTS terminó
+        if tts_activo and not _tts_activo_prev:
+            juego.pausar_timeout()      # TTS arrancó → congelar timer
+        elif not tts_activo and _tts_activo_prev:
+            juego.reanudar_timeout()    # TTS terminó → reanudar, descontando pausa
+
+        _tts_activo_prev = tts_activo
+
+        if not _whisper_procesando and not tts_activo:
             juego.tick()
         time.sleep(0.2)
 

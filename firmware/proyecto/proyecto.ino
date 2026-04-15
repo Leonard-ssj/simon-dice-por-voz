@@ -389,20 +389,21 @@ void procesar_serial_entrada() {
   while (Serial.available()) {
     char c = (char)Serial.read();
 
-    // 'R' = iniciar grabación (spacebar presionado en el panel web)
-    if (c == 'R' || c == 'r') {
-      while (Serial.available()) Serial.read();
-      if (estado == LISTO) {
-        iniciar_grabacion();
+    // 'R' y 'T' son comandos PTT de un solo byte — SOLO se interpretan como
+    // PTT si son el PRIMER carácter de la línea (serial_buf vacío).
+    // Si serial_buf no está vacío, estamos en medio de un comando de texto
+    // (p.ej. LED:ROJO, OLED:...para comenzar...) y 'r'/'R' es solo un carácter
+    // normal del texto — NO un comando PTT.
+    if (serial_buf.length() == 0) {
+      if (c == 'R' || c == 'r') {
+        while (Serial.available()) Serial.read();   // flush — el PTT es atómico
+        if (estado == LISTO) iniciar_grabacion();
+        return;
       }
-      return;
-    }
-
-    // 'T' = detener grabación (spacebar suelto — solo relevante en GRABANDO,
-    //       en LISTO se ignora silenciosamente)
-    if (c == 'T' || c == 't') {
-      while (Serial.available()) Serial.read();
-      return;
+      if (c == 'T' || c == 't') {
+        while (Serial.available()) Serial.read();
+        return;   // en LISTO se ignora silenciosamente
+      }
     }
 
     // Acumular líneas de texto

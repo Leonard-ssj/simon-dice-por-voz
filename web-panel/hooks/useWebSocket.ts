@@ -510,11 +510,11 @@ export function useWebSocket(wsUrl?: string) {
 
   // ---- Props compuestos para UI ----
 
-  const puedoHablar    = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado;
   const grabando       = rawGrabando   || whisper.grabando;
   const procesando     = rawProcesando || whisper.procesando;
   const micAbierto     = rawGrabando   || whisper.micAbierto;
   const transcribiendo = grabando || procesando;
+  const puedoHablar    = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado && !transcribiendo;
   const modeloCargado  = whisperLocalActivo || whisper.modeloCargado;
 
   // Nivel de mic solo disponible en modo WASM (Python mic no envía RMS al browser)
@@ -533,7 +533,19 @@ export function useWebSocket(wsUrl?: string) {
     limpiarLog,
     reiniciar: () => {
       enviarComando("REINICIAR");
-      setEstadoJuego((prev) => ({ ...prev, log: [] }));
+      whisper.cancelarEscucha();
+      setRawGrabandoAll(false);
+      setRawProcesandoAll(false);
+      escuchandoRef.current = false;
+      setEstadoJuego((prev) => ({
+        ...prev,
+        log:                [],
+        ultimaDeteccion:    null,
+        ultimoTextoWhisper: null,
+        ultimoResultado:    null,
+        esperado:           null,
+        ledActivo:          null,
+      }));
     },
     whisperLocalActivo,
     whisperProgresoDescarga: whisperLocalActivo ? null : whisper.progresoDescarga,

@@ -5,6 +5,7 @@
 
 import random
 import time
+import threading as _threading
 from enum import Enum
 from config_test import (
     TIMEOUT_RESPUESTA, NIVEL_INICIAL, MAX_NIVEL,
@@ -39,13 +40,22 @@ class JuegoSimulador:
     Lógica completa del Simon Dice en Python.
     Se comunica hacia afuera mediante callbacks para no acoplarse
     al WebSocket, terminal o cualquier otra salida.
+
+    Las operaciones bloqueantes (mostrar secuencia, transiciones CORRECT/WRONG)
+    corren en threads daemon propios — procesar_comando() retorna en <1ms.
     """
 
-    def __init__(self, timeout_ms: int = None):
+    def __init__(self, timeout_ms: int = None,
+                 duracion_led_ms: int = None,
+                 pausa_leds_ms:   int = None):
         # timeout_ms permite sobreescribir TIMEOUT_RESPUESTA sin tocar config_test.py.
         # servidor_pc pasa config.py:TIMEOUT_RESPUESTA (60s).
         # El simulador de tests usa el valor por defecto de config_test.py (30s).
-        self._timeout_ms    = timeout_ms if timeout_ms is not None else TIMEOUT_RESPUESTA
+        self._timeout_ms    = timeout_ms    if timeout_ms    is not None else TIMEOUT_RESPUESTA
+        # Timing de la secuencia — si no se pasa, usa config_test.py.
+        # servidor.py debe pasar los valores de config.py para evitar desincronía.
+        self._duracion_led  = duracion_led_ms if duracion_led_ms is not None else DURACION_LED_SIM
+        self._pausa_leds    = pausa_leds_ms   if pausa_leds_ms   is not None else PAUSA_ENTRE_LEDS
 
         self._estado        = Estado.IDLE
         self._secuencia     = []
@@ -58,6 +68,11 @@ class JuegoSimulador:
         self._en_pausa_timeout = False
         self._pausado       = False
         self._terminando    = False        # bandera anti doble-GAMEOVER
+
+        # Protege _estado contra acceso concurrente (hilo-seq vs hilo-tick)
+        self._lock          = _threading.Lock()
+        # Evita doble arranque de secuencia simultánea
+        self._seq_en_curso  = False
 
         # Callbacks — se asignan desde main.py
         self.on_estado_cambio  = lambda estado: None   # (Estado)
@@ -116,6 +131,11 @@ class JuegoSimulador:
         self._terminando   = False   # permitir que tick() dispare timeout en la nueva partida
 
     def procesar_comando(self, cmd: str):
+        """
+        Procesa un comando del juego. SIEMPRE retorna en <1ms.
+        Las operaciones bloqueantes (mostrar secuencia, sleeps de transición)
+        se ejecutan en threads daemon — no bloquean el hilo llamante.
+        """
         cmd = cmd.strip().upper()
 
         if cmd not in VOCABULARIO and cmd != "DESCONOCIDO":
@@ -140,8 +160,12 @@ class JuegoSimulador:
         elif estado == Estado.LISTENING:
             if cmd == "REPITE":
                 self.on_log("Repitiendo secuencia...")
-                self._mostrar_secuencia_bloqueante()
-                self._empezar_escucha()
+                # Mostrar secuencia de nuevo en su propio thread
+                self._seq_en_curso = True
+                _threading.Thread(
+                    target=self._hilo_repite,
+                    daemon=True, name="seq-repite"
+                ).start()
             elif cmd == "PAUSA":
                 self._cambiar_estado(Estado.PAUSA)
             elif cmd in COLORES:
@@ -155,6 +179,14 @@ class JuegoSimulador:
             if cmd in ("START", "REINICIAR"):
                 self._reiniciar()
                 self._iniciar_secuencia()
+
+    def _hilo_repite(self):
+        """Muestra la secuencia de nuevo (REPITE) sin bloquear el hilo llamante."""
+        try:
+            self._mostrar_secuencia_bloqueante()
+            self._empezar_escucha()
+        finally:
+            self._seq_en_curso = False
 
     def pausar_timeout(self):
         """Congela el contador de timeout mientras Whisper procesa."""
@@ -187,22 +219,39 @@ class JuegoSimulador:
         return [random.choice(COLORES) for _ in range(longitud)]
 
     def _iniciar_secuencia(self):
+        """
+        Arranca la visualización de la secuencia en un thread daemon.
+        Retorna inmediatamente — NO bloquea el hilo llamante.
+        """
+        if self._seq_en_curso:
+            return
+        self._seq_en_curso = True
         self._pos_escuchar = 0
         longitud = self._nivel
         self.on_secuencia(self._secuencia[:longitud])
-        self._mostrar_secuencia_bloqueante()
-        self._empezar_escucha()
+        _threading.Thread(
+            target=self._hilo_secuencia,
+            daemon=True, name="seq"
+        ).start()
+
+    def _hilo_secuencia(self):
+        """Hilo dedicado: muestra LEDs (bloqueante aquí) y pasa a LISTENING."""
+        try:
+            self._mostrar_secuencia_bloqueante()
+            self._empezar_escucha()
+        finally:
+            self._seq_en_curso = False
 
     def _mostrar_secuencia_bloqueante(self):
-        """Muestra los LEDs de la secuencia uno por uno (bloqueante)."""
+        """Muestra los LEDs de la secuencia uno por uno (bloqueante — solo llamar desde un thread dedicado)."""
         self._cambiar_estado(Estado.SHOWING_SEQUENCE)
         longitud = self._nivel
         for color in self._secuencia[:longitud]:
             self.on_mostrar_led(color)
             self.on_sonido("color", color)
-            time.sleep(DURACION_LED_SIM / 1000)
+            time.sleep(self._duracion_led / 1000)
             self.on_apagar_led(color)
-            time.sleep(PAUSA_ENTRE_LEDS / 1000)
+            time.sleep(self._pausa_leds / 1000)
 
     def _empezar_escucha(self):
         self._tiempo_inicio    = time.time()
@@ -220,20 +269,18 @@ class JuegoSimulador:
         if cmd == esperado:
             self._pos_escuchar += 1
             if self._pos_escuchar >= self._nivel:
-                # Secuencia completada
+                # Secuencia completada — transición en thread propio (no bloquear audio-proc)
                 self._puntuacion += self._nivel * 10
                 self.on_puntuacion(self._puntuacion)
                 self.on_resultado("CORRECT")
                 self.on_sonido("correcto")
                 self._cambiar_estado(Estado.CORRECT)
-                time.sleep(0.6)
-
-                self._nivel = min(self._nivel + 1, MAX_NIVEL)
-                self.on_nivel(self._nivel)
-                self.on_log(f"¡Nivel {self._nivel}! Secuencia ahora tiene {self._nivel} pasos.")
-                self._iniciar_secuencia()
+                _threading.Thread(
+                    target=self._hilo_nivel_up,
+                    daemon=True, name="nivel-up"
+                ).start()
             else:
-                # Parcialmente correcto
+                # Parcialmente correcto — siguiente color sin transición lenta
                 self.on_resultado("CORRECT")
                 self.on_log(f"Bien ({self._pos_escuchar}/{self._nivel}). Sigue...")
                 self._empezar_escucha()
@@ -242,8 +289,23 @@ class JuegoSimulador:
             self.on_log(f"Incorrecto. Esperaba {esperado}, dijiste {cmd}.")
             self.on_sonido("error")
             self._cambiar_estado(Estado.WRONG)
-            time.sleep(0.8)
-            self._cambiar_estado(Estado.GAME_OVER)
+            _threading.Thread(
+                target=self._hilo_gameover,
+                daemon=True, name="gameover-delay"
+            ).start()
+
+    def _hilo_nivel_up(self):
+        """Espera breve post-CORRECT, sube nivel y arranca nueva secuencia."""
+        time.sleep(0.6)
+        self._nivel = min(self._nivel + 1, MAX_NIVEL)
+        self.on_nivel(self._nivel)
+        self.on_log(f"¡Nivel {self._nivel}! Secuencia ahora tiene {self._nivel} pasos.")
+        self._iniciar_secuencia()
+
+    def _hilo_gameover(self):
+        """Espera breve post-WRONG y transiciona a GAME_OVER."""
+        time.sleep(0.8)
+        self._cambiar_estado(Estado.GAME_OVER)
 
     def _cambiar_estado(self, nuevo: Estado):
         self._estado = nuevo

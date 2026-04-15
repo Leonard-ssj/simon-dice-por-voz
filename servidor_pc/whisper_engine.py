@@ -33,21 +33,41 @@ from validador import texto_a_comando
 
 
 # ─── Prompt de contexto para Whisper ─────────────────────────────────────────
-# SOLO VOCABULARIO — sin frases largas en español.
-# Un prompt con oraciones completas ("Juego Simon Dice. El jugador dice...")
-# hace que Whisper alucine textos de YouTube/subtítulos cuando el audio es
-# corto o ruidoso ("Subtítulos realizados por la comunidad de Amara.org").
-# Con temperature=0.0 + solo vocab, Whisper permanece anclado al vocabulario.
+# IGUAL al de test_hardware/test_whisper.py — el que demostró funcionar bien
+# con el MAX4466 real (ADC analógico, SNR bajo).
+#
+# Por qué el prompt largo ayuda:
+#   - Le dice a Whisper exactamente qué esperar → reduce confusión fonética.
+#   - Los ejemplos de pronunciación ('a-sul' es azul) anclan palabras difíciles.
+#   - "Transcribe solo esa palabra" impide que invente frases completas.
+#
+# Por qué era peligroso antes (ya no lo es):
+#   - Antes el botón GPIO0 grababa en boot / durante TTS → audio malo →
+#     Whisper no entendía nada → se "escapaba" al prompt y generaba "Subtítulos".
+#   - Ahora el botón está eliminado y _reservar_ventana_tts() bloquea el PTT
+#     mientras el narrador habla → el audio llega limpio → el prompt ayuda.
+#   - Además, _ALUCINACIONES_CONOCIDAS filtra cualquier caso residual.
+#
+# Adaptado de test_whisper.py: usa "empieza/para" en vez de "start/stop"
+# porque eso es lo que los jugadores dicen naturalmente en español.
 _INITIAL_PROMPT = (
-    "rojo verde azul amarillo "
-    "empieza para pausa repite reiniciar "
-    "arriba abajo izquierda derecha "
-    "sí no"
+    "Juego Simon Dice. El jugador dice exactamente UNA palabra del vocabulario en español: "
+    "rojo, verde, azul, amarillo, empieza, para, pausa, repite, reiniciar, "
+    "arriba, abajo, izquierda, derecha, sí, no. "
+    "Ejemplos de pronunciación: "
+    "'a-sul' es azul. 'ro-jo' es rojo. 'ber-de' es verde. 'a-ma-ri-yo' es amarillo. "
+    "'em-pie-za' es empieza. 'pa-ra' es para. "
+    "'a-rri-ba' es arriba. 'a-ba-jo' es abajo. "
+    "'iz-kier-da' es izquierda. 're-i-ni-siar' es reiniciar. "
+    "Transcribe solo esa palabra, sin puntuación, sin mayúsculas extra: "
+    "rojo verde azul amarillo empieza para pausa repite reiniciar "
+    "arriba abajo izquierda derecha sí no."
 )
 
 # ─── Alucinaciones conocidas de Whisper ──────────────────────────────────────
-# Whisper genera estos textos cuando el audio es muy corto, silencioso o
-# tiene un prompt largo en español. Los detectamos y rechazamos.
+# Segunda línea de defensa: si a pesar del buen audio Whisper genera uno de
+# estos textos (bug conocido del modelo en español), lo descartamos.
+# Con audio limpio y temperature=0.0 esto casi nunca ocurre, pero es un seguro.
 _ALUCINACIONES_CONOCIDAS = [
     "amara.org",
     "subtítulos",
@@ -61,8 +81,6 @@ _ALUCINACIONES_CONOCIDAS = [
     "traducido por",
     "community subtitles",
     "next episode",
-    "juego simon dice",   # el prompt anterior se filtraba al output
-    "simon dice.",        # variante corta del prompt
 ]
 
 
@@ -267,6 +285,17 @@ class WhisperEngine:
         for alu in _ALUCINACIONES_CONOCIDAS:
             if alu in texto_lower:
                 print(f"[Whisper] Alucinación detectada ('{alu}') — descartando.")
+                return "", "DESCONOCIDO"
+
+        # Detectar alucinaciones de caracteres repetitivos (AAAA..., eeee..., etc.).
+        # compression_ratio_threshold=2.4 debería atraparlas, pero a veces se escapan.
+        # Si el texto tiene > 8 chars y ≤ 2 chars únicos (ignorando espacios y puntos)
+        # es casi seguro una alucinación de Whisper, no habla real.
+        if len(texto_raw) > 8:
+            _solo_letras = texto_raw.lower().replace(" ", "").replace(".", "").replace(",", "")
+            _chars_unicos = len(set(_solo_letras))
+            if _chars_unicos <= 2:
+                print(f"[Whisper] Alucinación repetitiva (chars únicos={_chars_unicos}) — descartando.")
                 return "", "DESCONOCIDO"
 
         # Descartar outputs que son claramente ruido/respiración:

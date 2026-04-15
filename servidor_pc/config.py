@@ -42,5 +42,10 @@ PAUSA_ENTRE_LEDS  = 300     # ms — pausa entre LEDs al mostrar la secuencia
 NIVEL_INICIAL     = 1
 MAX_NIVEL         = 20
 
+# ─── Whisper ──────────────────────────────────────────────────────────────────
+# Tiempo máximo que Whisper puede tardar antes de descartar el audio.
+# Si la transcripción supera este límite, se pide al usuario que hable de nuevo.
+WHISPER_TIMEOUT = 10   # segundos
+
 # ─── Debug ────────────────────────────────────────────────────────────────────
 DEBUG = True   # muestra logs detallados en la terminal

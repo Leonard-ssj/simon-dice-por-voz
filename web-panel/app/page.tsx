@@ -238,8 +238,9 @@ export default function Home() {
               estado={estadoJuego.estado}
               esperado={estadoJuego.esperado}
               dark={dark}
-              timeoutMs={30000}
-              startDelayMs={3500}
+              timeoutMs={60000}
+              startDelayMs={0}
+              tiempoRestanteMs={(activo as typeof ws).tiempoRestanteMs ?? null}
             />
 
             {/* Estadísticas de sesión */}

@@ -56,6 +56,7 @@ _FREQ_ESPECIAL = {
 # ─── Cola y estado del hilo TTS ──────────────────────────────────────────────
 _tts_queue:  queue.Queue      = queue.Queue()
 _tts_listo   = threading.Event()
+_tts_activo  = threading.Event()   # set mientras el worker está hablando o hay items en cola
 _voz_nombre  = ""
 _usar_edge   = False
 _edge_loop: asyncio.AbstractEventLoop | None = None
@@ -188,6 +189,7 @@ def _tts_worker():
         texto = _tts_queue.get()
         if texto is None:
             break
+        _tts_activo.set()
         try:
             if _usar_edge:
                 _hablar_edge(texto)
@@ -198,6 +200,15 @@ def _tts_worker():
                 print(f"[TTS] Error inesperado: {e}")
         finally:
             _tts_queue.task_done()
+            if _tts_queue.empty():
+                # Buffer de eco: esperar 0.6s después de que el narrador termina.
+                # El sonido del altavoz de la laptop tarda ~0.3-0.5s en disiparse.
+                # Sin este buffer, el micrófono MAX4466 puede capturar el eco y
+                # Whisper lo transcribe como un comando (ej: "Ba-ra-ve" en lugar de
+                # el silencio esperado). Solo se aplica si la cola sigue vacía.
+                time.sleep(0.6)
+                if _tts_queue.empty():
+                    _tts_activo.clear()
 
 
 # ─── API pública ─────────────────────────────────────────────────────────────
@@ -213,13 +224,40 @@ def esperar_tts(timeout: float = 5.0) -> bool:
     return _tts_listo.wait(timeout=timeout)
 
 
+def tts_hablando() -> bool:
+    """True si el narrador está hablando, tiene items pendientes, o está en buffer de eco."""
+    return _tts_activo.is_set() or not _tts_queue.empty()
+
+
+def cancelar_tts():
+    """
+    Vacía la cola del TTS inmediatamente. Los items pendientes no se hablan.
+    Usar en REINICIAR, STOP o desconexión del panel para que el narrador
+    no siga hablando del estado anterior del juego.
+    """
+    vaciados = 0
+    while not _tts_queue.empty():
+        try:
+            _tts_queue.get_nowait()
+            _tts_queue.task_done()
+            vaciados += 1
+        except Exception:
+            break
+    _tts_activo.clear()
+    if vaciados and DEBUG:
+        print(f"[TTS] Cola cancelada ({vaciados} items descartados)")
+
+
 def decir(texto: str, bloquear: bool = True):
     """Encola texto para ser hablado. bloquear=True espera a que termine."""
     if not _tts_listo.is_set():
         return
+    _tts_activo.set()   # marcar como activo antes de encolar (evita ventana entre put y get)
     _tts_queue.put(texto)
     if bloquear:
         _tts_queue.join()
+        if _tts_queue.empty():
+            _tts_activo.clear()
 
 
 _NOMBRES_COLOR = {
