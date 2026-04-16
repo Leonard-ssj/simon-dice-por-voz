@@ -1,0 +1,40 @@
+Cómo probarlo — 3 pasos
+PASO 1 — Subir el sketch (código)
+En Arduino IDE con el speaker_test.ino abierto:
+
+
+Herramientas → Placa      → ESP32S3 Dev Module
+Herramientas → Flash Size → 16MB (128Mb)
+Herramientas → Partition Scheme → Custom
+Luego:
+
+
+Ctrl + U   (Subir sketch)
+Si no aparece "Custom" en Partition Scheme, elige "No OTA (2MB APP/2MB SPIFFS)" — funciona también pero con menos espacio.
+
+PASO 2 — Subir los audios al ESP32
+Cierra el Serial Monitor. Luego en PowerShell/CMD en la carpeta del proyecto:
+
+
+cd c:\TEST_bocina_esp32s3n16r8
+python subir_audio.py
+El script:
+
+Crea la imagen littlefs.bin con los 75 archivos
+Detecta el puerto COM del ESP32 automáticamente
+La sube al flash (offset 0x310000)
+Tarda ~30-60 segundos
+Verás algo como:
+
+
+  Subiendo al ESP32 en COM3...
+  Offset: 0x310000  |  Tamano: 12 MB
+  ...
+  [OK] Audio subido correctamente al ESP32.
+PASO 3 — Probar
+Abre el Serial Monitor a 115200. El ESP32 debe mostrar:
+
+
+LittleFS OK (6322 KB usados / 13107 KB total)
+Bocina OK
+Presiona D → reproduce las 12 frases de demo con voz humana, sin WiFi, sin delay.
