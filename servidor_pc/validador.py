@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 
 # ─── Vocabulario canónico (espejo de vocabulario.h) ───────────────────────────
 COLORES = ["ROJO", "VERDE", "AZUL", "AMARILLO"]
+COLORES_SET = set(COLORES)   # {"ROJO", "VERDE", "AZUL", "AMARILLO"}
 
 VOCABULARIO = {
     "ROJO", "VERDE", "AZUL", "AMARILLO",
@@ -240,3 +241,64 @@ def texto_a_comando(texto: str) -> str:
 
 # Modo debug (activable desde config.py vía servidor.py)
 DEBUG_VALIDADOR = False
+
+
+# ─── Multi-color: extracción de lista de colores de un texto ─────────────────
+
+def _mapear_palabra_a_color(palabra: str) -> str | None:
+    """
+    Intenta mapear una sola palabra normalizada a un color canónico.
+    Usa el mapa de variantes y fuzzy matching.
+    Retorna el color ("ROJO", "AZUL"…) o None si no coincide.
+    """
+    # Paso 1: mapa exacto de variantes (incluye correcciones fonéticas)
+    cmd = _MAPA.get(palabra)
+    if cmd and cmd in COLORES_SET:
+        return cmd
+
+    # Paso 2: fuzzy matching contra los 4 colores
+    mejor = None
+    mejor_ratio = 0.0
+    for color in COLORES:
+        umbral = 0.70 if len(color) <= 6 else 0.80
+        ratio  = SequenceMatcher(None, color, palabra).ratio()
+        if ratio >= umbral and ratio > mejor_ratio:
+            mejor_ratio = ratio
+            mejor = color
+    return mejor
+
+
+def texto_a_colores(texto: str) -> list[str]:
+    """
+    Extrae una lista ordenada de colores del texto de Whisper.
+    Para en la primera palabra que no sea un color reconocible — no las salta.
+
+    Ejemplos:
+        "azul rojo rojo amarillo"  → ["AZUL", "ROJO", "ROJO", "AMARILLO"]
+        "adul dojo amadillo"       → ["AZUL", "ROJO", "AMARILLO"]   (fuzzy)
+        "azul rojo sdadsa verde"   → ["AZUL", "ROJO"]               (para en sdadsa)
+        "sdadsa rojo rojo"         → []                              (primera palabra falla)
+        "reiniciar"                → []                              (no es color)
+
+    Si el resultado tiene 0 o 1 elementos, el llamante debe usar texto_a_comando().
+    """
+    if not texto or not texto.strip():
+        return []
+
+    norm = _normalizar(texto)
+    if not norm:
+        return []
+
+    # Comas y puntos actúan como separadores naturales entre colores
+    palabras = norm.replace(",", " ").replace(".", " ").split()
+    colores: list[str] = []
+
+    for palabra in palabras:
+        if not palabra:
+            continue
+        color = _mapear_palabra_a_color(palabra)
+        if color is None:
+            break   # Primera palabra no reconocida → cortar aquí
+        colores.append(color)
+
+    return colores

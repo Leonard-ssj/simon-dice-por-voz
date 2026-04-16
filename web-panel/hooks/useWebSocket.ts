@@ -89,6 +89,15 @@ export function useWebSocket(wsUrl?: string) {
   const rawGrabandoRef   = useRef(false);
   const rawProcesandoRef = useRef(false);
 
+  // Narrador TTS activo en servidor — bloquea spacebar y pausa countdown
+  const [narrando, setNarrando] = useState(false);
+  const narrandoRef = useRef(false);
+
+  const setNarrandoAll = useCallback((v: boolean) => {
+    narrandoRef.current = v;
+    setNarrando(v);
+  }, []);
+
   // ---- Whisper WASM (fallback — lazy, solo si Python no tiene Whisper) ----
   // autoCargar = false: no descarga nada hasta saber si hace falta
   const whisper = useWhisperWASM(false);
@@ -143,6 +152,7 @@ export function useWebSocket(wsUrl?: string) {
 
   const iniciarPTTVoz = useCallback(async () => {
     if (escuchandoRef.current) return;
+    if (narrandoRef.current) return;   // narrador activo → ignorar spacebar
     if (!ESTADOS_ESCUCHA.has(estadoRef.current)) return;
 
     escuchandoRef.current = true;
@@ -349,6 +359,18 @@ export function useWebSocket(wsUrl?: string) {
             agregarLog(`Fin del juego — Puntuación: ${prev.puntuacion}`, "error");
             break;
 
+          case "tts": {
+            // Narrador TTS arrancó/terminó en el servidor
+            const ttsActivo = (msg as Extract<MensajeWS, { tipo: "tts" }>).activo;
+            setNarrandoAll(ttsActivo);
+            if (ttsActivo) {
+              _pausarCountdown();
+            } else {
+              _reanudarCountdown();
+            }
+            break;
+          }
+
           case "voz":
             // Resultado de Whisper local — Python transcribió y procesó el comando
             siguiente.ultimoTextoWhisper = msg.texto;
@@ -407,6 +429,7 @@ export function useWebSocket(wsUrl?: string) {
       whisper.cancelarEscucha();
       setRawGrabandoAll(false);
       setRawProcesandoAll(false);
+      setNarrandoAll(false);
       escuchandoRef.current        = false;
       whisperDisponibleRef.current = false;
       setWhisperLocalActivo(false);
@@ -514,7 +537,7 @@ export function useWebSocket(wsUrl?: string) {
   const procesando     = rawProcesando || whisper.procesando;
   const micAbierto     = rawGrabando   || whisper.micAbierto;
   const transcribiendo = grabando || procesando;
-  const puedoHablar    = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado && !transcribiendo;
+  const puedoHablar    = ESTADOS_ESCUCHA.has(estadoJuego.estado) && estadoJuego.conectado && !transcribiendo && !narrando;
   const modeloCargado  = whisperLocalActivo || whisper.modeloCargado;
 
   // Nivel de mic solo disponible en modo WASM (Python mic no envía RMS al browser)
@@ -536,6 +559,7 @@ export function useWebSocket(wsUrl?: string) {
       whisper.cancelarEscucha();
       setRawGrabandoAll(false);
       setRawProcesandoAll(false);
+      setNarrandoAll(false);
       escuchandoRef.current = false;
       setEstadoJuego((prev) => ({
         ...prev,
@@ -553,6 +577,7 @@ export function useWebSocket(wsUrl?: string) {
     whisperGrabando:         grabando,
     whisperMicAbierto:       micAbierto,
     whisperProcesando:       procesando,
+    whisperNarrando:         narrando,
     whisperTiempoRestante:   whisperLocalActivo ? null : whisper.tiempoRestante,
     tiempoRestanteMs,        // countdown del turno sincronizado con el servidor (ms, null fuera de LISTENING)
     iniciarPTT:              iniciarPTTVoz,

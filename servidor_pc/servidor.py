@@ -45,6 +45,7 @@ from whisper_engine import WhisperEngine
 _SIM_PATH = os.path.join(os.path.dirname(__file__), "..", "tests", "simulador_pc")
 sys.path.insert(0, os.path.abspath(_SIM_PATH))
 from juego_sim import JuegoSimulador, Estado
+from validador import texto_a_colores
 
 
 # ─── Instancias globales ──────────────────────────────────────────────────────
@@ -95,10 +96,11 @@ _ESTADO_ES = {
 }
 
 # ─── Mensajes OLED por estado ─────────────────────────────────────────────────
+# None = dinámico, generado por _oled_juego_info()
 _OLED_ESTADO = {
     Estado.IDLE:             ("Simon Dice",    "Di EMPIEZA",     "para comenzar"),
     Estado.SHOWING_SEQUENCE: ("MOSTRANDO",     "secuencia",      ""),
-    Estado.LISTENING:        ("TU TURNO",      "Presiona boton", "y habla"),
+    Estado.LISTENING:        None,             # dinámico: nivel + puntos + posición
     Estado.EVALUATING:       ("Procesando...", "Whisper",        ""),
     Estado.CORRECT:          ("CORRECTO!",     "",               ""),
     Estado.LEVEL_UP:         ("NIVEL UP!",     "",               ""),
@@ -108,27 +110,56 @@ _OLED_ESTADO = {
 }
 
 
+def _oled_juego_info() -> tuple:
+    """OLED dinámico para LISTENING: nivel, puntos y posición en secuencia."""
+    n   = juego.nivel
+    p   = juego.puntuacion
+    pos = juego.pos_escuchar
+    tot = n
+    return ("TU TURNO", f"Nv{n} Pts:{p} {pos+1}/{tot}", "Presiona ESPACIO")
+
+
 # ─── Callbacks del juego ─────────────────────────────────────────────────────
 
 def _on_estado(estado: Estado):
+    global _estado_previo, _primer_turno_juego
     nombre_es = _ESTADO_ES.get(estado, estado.value)
     log(f"[Estado] {nombre_es}", "estado")
 
     # Actualizar panel web
     ws.enviar_estado(estado.value)
 
-    # Actualizar OLED del ESP32
+    # Actualizar OLED del ESP32 — None en el dict = dinámico
     oled = _OLED_ESTADO.get(estado, (estado.value, "", ""))
+    if oled is None:
+        oled = _oled_juego_info()
     serial.enviar_oled(*oled)
 
     # Narración TTS por estado.
-    # tts_hablando() es el mecanismo que bloquea el PTT durante la narración —
-    # no necesitamos estimar la duración manualmente.
     if estado == Estado.SHOWING_SEQUENCE:
         decir("Mira y escucha.", bloquear=False)
 
     elif estado == Estado.LISTENING:
-        decir("Tu turno. Presiona ESPACIO para hablar.", bloquear=False)
+        if _estado_previo == Estado.EVALUATING:
+            # Color(es) correcto(s) pero quedan más en la secuencia
+            if _ultimos_aceptados > 1:
+                decir(f"{_ultimos_aceptados} colores correctos. Tu turno.", bloquear=False)
+            else:
+                decir("Correcto. Tu turno.", bloquear=False)
+        elif _primer_turno_juego:
+            # Primer turno de la partida → orientar al jugador
+            decir("Tu turno. Presiona ESPACIO para hablar.", bloquear=False)
+            _primer_turno_juego = False
+        else:
+            # Turno normal (post-nivel, post-repite, etc.)
+            decir("Tu turno.", bloquear=False)
+
+    elif estado == Estado.CORRECT:
+        # Secuencia completa → LEVEL_UP vendrá enseguida; solo confirmar
+        decir("Correcto.", bloquear=False)
+
+    elif estado == Estado.IDLE:
+        _primer_turno_juego = True   # nueva partida: resetear orientación
 
     elif estado == Estado.PAUSA:
         decir("Juego pausado.", bloquear=False)
@@ -142,6 +173,8 @@ def _on_estado(estado: Estado):
             decir("Di empieza para volver a jugar.", bloquear=False)
 
         threading.Thread(target=_narrar, daemon=True).start()
+
+    _estado_previo = estado
 
 
 def _on_led_encender(color: str):
@@ -186,8 +219,8 @@ def _on_esperado(color: str):
 def _on_nivel(n: int):
     log(f"[Nivel] {n}", "sistema")
     ws.enviar_nivel(n)
-    # OLED: nivel actual
-    serial.enviar_oled(f"NIVEL {n}", "Bien hecho!", "")
+    pts = juego.puntuacion
+    serial.enviar_oled(f"NIVEL {n}!", f"Puntos: {pts}", "Bien hecho!")
     if n > 1:
         threading.Thread(
             target=lambda: decir(f"Nivel {n}.", bloquear=False),
@@ -206,7 +239,7 @@ def _on_resultado(r: str):
     ws.enviar_resultado(r)
 
     if r == "CORRECT":
-        decir("Correcto.", bloquear=False)
+        pass   # TTS lo maneja _on_estado(LISTENING) o _on_estado(CORRECT)
 
     elif r == "WRONG":
         def _narrar_wrong():
@@ -232,6 +265,9 @@ _juego_iniciado       = False   # el juego arranca solo cuando el panel conecta 
 _whisper_procesando   = False   # True mientras Whisper transcribe — el tick NO dispara timeout
 _whisper_hilo_activo: threading.Thread | None = None  # hilo Whisper activo — evita concurrencia
 _ptt_spacebar_activo  = False   # True SOLO cuando spacebar inició el PTT — descarta todo lo demás
+_estado_previo        = None    # Estado anterior — detecta de dónde viene LISTENING
+_primer_turno_juego   = True    # True en el primer turno de cada partida (TTS orientativo)
+_ultimos_aceptados    = 0       # Colores aceptados en el último multi-color (para TTS informativo)
 
 def _on_cliente_conectado():
     """
@@ -413,8 +449,21 @@ def _on_audio_recibido(pcm_bytes: bytes):
     if comando in ("REINICIAR", "PARA"):
         cancelar_tts()
 
-    # Procesar en el motor del juego
-    if comando != "DESCONOCIDO":
+    # ── Detección multi-color ──────────────────────────────────────────────
+    # Si el audio contiene 2+ colores reconocibles → modo multi-color.
+    # Si contiene 0-1 colores → camino normal con procesar_comando().
+    # texto_a_colores para en la primera palabra no reconocida como color.
+    global _ultimos_aceptados
+    colores_detectados = texto_a_colores(texto) if texto else []
+
+    if len(colores_detectados) >= 2 and juego.estado == Estado.LISTENING:
+        n = len(colores_detectados)
+        log(f"[Multi] {n} colores detectados: {' → '.join(colores_detectados)}", "voz")
+        ws.enviar_log(f"Multi-color: {' → '.join(colores_detectados)}")
+        _ultimos_aceptados = juego.procesar_colores_multiples(colores_detectados)
+        log(f"[Multi] {_ultimos_aceptados}/{n} aceptados", "ok" if _ultimos_aceptados else "error")
+    elif comando != "DESCONOCIDO":
+        _ultimos_aceptados = 0
         juego.procesar_comando(comando)
 
 
@@ -423,6 +472,7 @@ def _on_audio_corto():
     log("[PTT] Audio muy corto — ignorado", "info")
     juego.reanudar_timeout()
     ws.enviar_log("PTT muy corto — habla más tiempo.")
+    ws.enviar_voz("", "DESCONOCIDO")   # resetear panel (sale de "Grabando..."/"Procesando...")
 
 
 def _on_comando_panel(cmd: str):
@@ -494,8 +544,10 @@ def _hilo_tick():
         # Detectar transición TTS inició / TTS terminó
         if tts_activo and not _tts_activo_prev:
             juego.pausar_timeout()      # TTS arrancó → congelar timer
+            ws.enviar_tts(True)         # panel pausa countdown + bloquea spacebar
         elif not tts_activo and _tts_activo_prev:
             juego.reanudar_timeout()    # TTS terminó → reanudar, descontando pausa
+            ws.enviar_tts(False)        # panel reanuda countdown + habilita spacebar
 
         _tts_activo_prev = tts_activo
 

@@ -228,6 +228,10 @@ class ServidorWS:
     def enviar_log(self, mensaje: str):
         self.enviar({"tipo": "log", "raw": mensaje, "mensaje": mensaje})
 
+    def enviar_tts(self, activo: bool):
+        """Notifica al panel si el narrador TTS está hablando o terminó."""
+        self.enviar({"tipo": "tts", "activo": activo})
+
     def hay_clientes(self) -> bool:
         """Retorna True si hay al menos un cliente WebSocket conectado."""
         return bool(self._clientes)

@@ -108,6 +108,10 @@ class JuegoSimulador:
         return list(self._secuencia)
 
     @property
+    def pos_escuchar(self) -> int:
+        return self._pos_escuchar
+
+    @property
     def esperado(self) -> str | None:
         if self._pos_escuchar < len(self._secuencia):
             return self._secuencia[self._pos_escuchar]
@@ -179,6 +183,65 @@ class JuegoSimulador:
             if cmd in ("START", "REINICIAR"):
                 self._reiniciar()
                 self._iniciar_secuencia()
+
+    def procesar_colores_multiples(self, colores: list) -> int:
+        """
+        Evalúa una lista de colores en secuencia (modo multi-color por audio).
+        Para en el primer error — no salta colores incorrectos.
+        Retorna el número de colores aceptados correctamente antes de parar.
+
+        Casos:
+          - Todos correctos y secuencia completa → CORRECT → LEVEL_UP
+          - Todos correctos pero secuencia incompleta → on_resultado(CORRECT) → LISTENING
+          - Primer color incorrecto → on_resultado(WRONG) → GAME_OVER (con delay)
+        """
+        if self._estado != Estado.LISTENING or not colores:
+            return 0
+
+        self._cambiar_estado(Estado.EVALUATING)
+        aceptados = 0
+
+        for color in colores:
+            if self._pos_escuchar >= self._nivel:
+                break   # Secuencia ya completada — no debería ocurrir
+
+            esperado = self._secuencia[self._pos_escuchar]
+
+            if color == esperado:
+                self._pos_escuchar += 1
+                aceptados += 1
+
+                if self._pos_escuchar >= self._nivel:
+                    # Secuencia completa — mismo flujo que _evaluar()
+                    self._puntuacion += self._nivel * 10
+                    self.on_puntuacion(self._puntuacion)
+                    self.on_resultado("CORRECT")
+                    self.on_sonido("correcto")
+                    self._cambiar_estado(Estado.CORRECT)
+                    _threading.Thread(
+                        target=self._hilo_nivel_up,
+                        daemon=True, name="nivel-up"
+                    ).start()
+                    return aceptados
+                # else: continuar con el siguiente color del audio
+            else:
+                # Primer error → WRONG
+                self.on_resultado("WRONG")
+                self.on_log(f"Incorrecto. Esperaba {esperado}, dijiste {color}.")
+                self.on_sonido("error")
+                self._cambiar_estado(Estado.WRONG)
+                _threading.Thread(
+                    target=self._hilo_gameover,
+                    daemon=True, name="gameover-delay"
+                ).start()
+                return aceptados
+
+        # Todos los colores del audio fueron correctos, pero la secuencia no terminó
+        if aceptados > 0:
+            self.on_resultado("CORRECT")
+            self.on_log(f"Bien ({self._pos_escuchar}/{self._nivel}). Continúa...")
+        self._empezar_escucha()
+        return aceptados
 
     def _hilo_repite(self):
         """Muestra la secuencia de nuevo (REPITE) sin bloquear el hilo llamante."""

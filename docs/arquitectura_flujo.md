@@ -18,7 +18,9 @@ sequenceDiagram
     Python->>Panel: WS: {tipo:"ready", whisperDisponible:true, tiempoTimeout:60000}
     Python->>Juego: juego.iniciar() → estado IDLE
     Python->>Panel: WS: {tipo:"state", estado:"IDLE"}
-    Python->>TTS: decir("Simon Dice listo. Presiona ESPACIO...")
+    Python->>TTS: decir("Simon Dice listo...")
+    TTS-->>Panel: WS: {tipo:"tts", activo:true}
+    TTS-->>Panel: WS: {tipo:"tts", activo:false}
 
     Note over Panel,TTS: === INICIO DE RONDA ===
     Usuario->>Panel: Presiona ESPACIO
@@ -26,12 +28,11 @@ sequenceDiagram
     Python->>Juego: pausar_timeout()
     Python->>Python: _verificar_condiciones_ptt()
 
-    alt TTS hablando
-        Python->>Panel: WS: enviar_log("Espera al narrador...")
-        Note over Python: timer sigue pausado — _hilo_tick no avanza<br/>mientras tts_hablando()=True
+    alt TTS hablando (narrando=true en panel)
+        Python->>Panel: WS: {tipo:"voz", texto:"", comando:"DESCONOCIDO"}
+        Note over Panel: rawGrabando/rawProcesando se limpian inmediatamente
     else SHOWING_SEQUENCE activo
-        Python->>Panel: WS: enviar_log("Mira la secuencia")
-        Note over Python: timer no aplica — estado ≠ LISTENING
+        Python->>Panel: WS: {tipo:"voz", texto:"", comando:"DESCONOCIDO"}
     else Condiciones OK
         Python->>Python: _ptt_spacebar_activo = True
         Python->>ESP32: Serial: 'R'
@@ -48,39 +49,46 @@ sequenceDiagram
     ESP32->>Python: Serial: [N bytes PCM int16 LE 8kHz]
     ESP32->>Python: Serial: "AUDIO_END"
 
-    Note over Python,Whisper: === PROCESAMIENTO WHISPER ===
-    Python->>Python: _whisper_procesando = True<br/>_hilo_tick pausa el timer
-    Python->>Panel: WS: (rawProcesando visible en UI)
-    Python->>Whisper: transcribir(pcm_bytes)
-    Whisper->>Whisper: HPF 80Hz → LPF 3400Hz → noisereduce<br/>→ normalize → resample 16kHz → Whisper small
-    alt Whisper termina < 10s
-        Whisper->>Python: ("azul.", "AZUL")
-        Python->>Python: _whisper_procesando = False<br/>juego.reanudar_timeout()
-        Python->>Panel: WS: {tipo:"voz", texto:"azul.", comando:"AZUL"}
-    else Whisper tarda > 10s (timeout)
-        Python->>Python: _whisper_hilo_activo = None (liberar)<br/>_whisper_procesando = False
+    alt Audio muy corto (< 0.25s)
+        ESP32->>Python: Serial: "AUDIO_CORTO"
         Python->>Panel: WS: {tipo:"voz", texto:"", comando:"DESCONOCIDO"}
-        Python->>Panel: WS: enviar_log("Whisper tardó demasiado...")
-        Note over Python: Usuario puede reintentar inmediatamente
+        Note over Panel: sale de "Grabando..." inmediatamente
+    else Audio válido
+        Note over Python,Whisper: === PROCESAMIENTO WHISPER ===
+        Python->>Python: _whisper_procesando = True<br/>_hilo_tick pausa el timer
+        Python->>Whisper: transcribir(pcm_bytes)
+        Whisper->>Whisper: HPF 80Hz → LPF 3400Hz → noisereduce<br/>→ normalize → resample 16kHz → Whisper small
+        alt Whisper termina < 10s
+            Whisper->>Python: ("azul.", "AZUL")
+            Python->>Python: _whisper_procesando = False<br/>juego.reanudar_timeout()
+            Python->>Panel: WS: {tipo:"voz", texto:"azul.", comando:"AZUL"}
+        else Whisper tarda > 10s (timeout)
+            Python->>Python: _whisper_hilo_activo = None (liberar)<br/>_whisper_procesando = False
+            Python->>Panel: WS: {tipo:"voz", texto:"", comando:"DESCONOCIDO"}
+            Note over Python: Usuario puede reintentar inmediatamente
+        end
     end
 
     Note over Python,Juego: === EVALUACIÓN ===
     Python->>Juego: procesar_comando("AZUL")
     Juego->>Juego: _evaluar("AZUL")
 
-    alt Correcto
+    alt Correcto — quedan más colores en secuencia
         Juego->>Python: on_resultado("CORRECT")
         Python->>Panel: WS: {tipo:"result", resultado:"CORRECT"}
+        Juego->>Python: on_estado(EVALUATING → LISTENING)
+        Python->>TTS: decir("Correcto. Tu turno.")
+        Python->>Panel: WS: {tipo:"tts", activo:true}
+        Note over Panel: countdown pausado, spacebar bloqueado
+        Python->>Panel: WS: {tipo:"tts", activo:false}
+        Note over Panel: countdown reanuda desde donde quedó
+    else Correcto — secuencia completa → LEVEL_UP
+        Juego->>Python: on_resultado("CORRECT")
+        Python->>Panel: WS: {tipo:"result", resultado:"CORRECT"}
+        Juego->>Python: on_estado(CORRECT)
         Python->>TTS: decir("Correcto.")
-        alt Secuencia completa → LEVEL_UP
-            Juego->>Python: on_estado(LEVEL_UP)
-            Juego->>Python: on_nivel(n)
-            Python->>Panel: WS: {tipo:"level", nivel:n}
-            Juego->>Python: on_estado(SHOWING_SEQUENCE)
-        else Más items en secuencia
-            Juego->>Python: on_estado(LISTENING)
-            Python->>Panel: WS: {tipo:"state", estado:"LISTENING"}
-        end
+        Juego->>Python: on_nivel(n)
+        Juego->>Python: on_estado(SHOWING_SEQUENCE)
     else Incorrecto / TIMEOUT
         Juego->>Python: on_resultado("WRONG" | "TIMEOUT")
         Python->>Panel: WS: {tipo:"result", resultado:"WRONG"}
@@ -107,11 +115,11 @@ stateDiagram-v2
     LISTENING --> EVALUATING : procesar_comando(color)
     LISTENING --> GAME_OVER : tick() — timeout expiró\n(timer pausado durante TTS + Whisper)
 
-    EVALUATING --> CORRECT : color == esperado
+    EVALUATING --> CORRECT : color == esperado && secuencia completa
+    EVALUATING --> LISTENING : color == esperado && quedan colores
     EVALUATING --> WRONG : color != esperado
 
-    CORRECT --> LISTENING : quedan items en secuencia\n(pos_actual < longitud)
-    CORRECT --> LEVEL_UP : secuencia completa
+    CORRECT --> LEVEL_UP : _hilo_nivel_up (0.6s delay)
 
     LEVEL_UP --> SHOWING_SEQUENCE : _iniciar_secuencia()\n(nivel++)
 
@@ -122,29 +130,41 @@ stateDiagram-v2
 
 ---
 
-## Diagrama 3: Sincronización TTS ↔ Timer ↔ PTT
+## Diagrama 3: Sincronización TTS ↔ Timer ↔ PTT ↔ Panel
 
 ```mermaid
 flowchart TD
     A([Spacebar presionado]) --> B[ws_server: on_pausar_timeout\njuego.pausar_timeout]
     B --> C{_verificar_condiciones_ptt}
 
-    C -->|tts_hablando=True| D[Rechazar PTT\nNO reanudar_timeout\nlog: Espera al narrador]
+    C -->|tts_hablando=True| D[Rechazar PTT\nenviar_voz vacío → panel limpia flags\nlog: Espera al narrador]
     D --> E[_hilo_tick: tts_hablando=True\nNO llama juego.tick\nTimer congelado]
-    E --> F[TTS termina → _tts_activo.clear]
-    F --> G[_hilo_tick: tts_hablando=False\nTimer reanuda automáticamente]
-    G --> H([Usuario puede presionar spacebar])
+    E --> F[TTS termina → _tts_activo.clear\nenviar_tts false → panel reanuda countdown]
+    F --> G([Usuario puede presionar spacebar])
 
-    C -->|SHOWING_SEQUENCE| I[Rechazar PTT\nreanudar_timeout\nlog: Mira la secuencia]
-    I --> J[Timer no aplica\nestado ≠ LISTENING]
+    C -->|SHOWING_SEQUENCE| H[Rechazar PTT\nenviar_voz vacío → panel limpia flags\nlog: Mira la secuencia]
 
-    C -->|Condiciones OK| K[_ptt_spacebar_activo = True\nSerial R → ESP32 graba]
-    K --> L[Serial audio → Python]
-    L --> M[_whisper_procesando = True\n_hilo_tick pausa timer]
-    M --> N{join timeout=10s}
+    C -->|Condiciones OK| I[_ptt_spacebar_activo = True\nSerial R → ESP32 graba]
+    I --> J[Serial audio → Python]
+    J -->|AUDIO_CORTO| K[enviar_voz vacío → panel\njuego.reanudar_timeout]
+    J -->|Audio OK| L[_whisper_procesando = True\n_hilo_tick pausa timer]
+    L --> M{join timeout=10s}
 
-    N -->|< 10s OK| O[enviar_voz al panel\njuego.procesar_comando\n_whisper_procesando=False\nTimer reanuda]
-    N -->|> 10s TIMEOUT| P[_whisper_hilo_activo = None\n_whisper_procesando = False\nenviar_voz vacío → panel resetea\nTimer reanuda\nUsuario puede reintentar]
+    M -->|< 10s OK| N[enviar_voz al panel\njuego.procesar_comando\n_whisper_procesando=False\nTimer reanuda]
+    M -->|> 10s TIMEOUT| O[_whisper_hilo_activo = None\n_whisper_procesando = False\nenviar_voz vacío → panel resetea\nTimer reanuda\nUsuario puede reintentar]
+
+    subgraph panel["Panel Web"]
+        P1[Recibe tts=true → pausar countdown\nbloquear spacebar\nnarrando=true]
+        P2[Recibe tts=false → reanudar countdown\nhabilitar spacebar\nnarrando=false]
+        P3[Recibe voz → limpiar rawGrabando\nrawProcesando\nescuchandoRef=false]
+    end
+
+    E -.->|enviar_tts true| P1
+    F -.->|enviar_tts false| P2
+    N -.-> P3
+    O -.-> P3
+    K -.-> P3
+    D -.-> P3
 ```
 
 ---
@@ -165,6 +185,7 @@ flowchart LR
         E9["score\n{puntuacion: 10}"]
         E10["gameover"]
         E11["log\n{mensaje: '...'}"]
+        E12["tts\n{activo: true|false}"]
     end
 
     subgraph panel["Web Panel (Next.js)"]
@@ -173,11 +194,12 @@ flowchart LR
         P3["Muestra secuencia"]
         P4["Muestra palabra esperada"]
         P5["Muestra detección Whisper\nreset rawProcesando/rawGrabando"]
-        P6["Muestra resultado turno"]
+        P6["Muestra resultado turno\nreset flags PTT"]
         P7["Actualiza nivel"]
         P8["Actualiza puntuación"]
         P9["Pantalla Game Over"]
         P10["Log en tiempo real"]
+        P11["Pausa/reanuda countdown\nBloquea/habilita spacebar\nnarrando=true/false"]
     end
 
     E1 --> P1
@@ -191,7 +213,46 @@ flowchart LR
     E9 --> P8
     E10 --> P9
     E11 --> P10
+    E12 --> P11
 ```
+
+---
+
+## Diagrama 5: Modo Multi-Color (varios colores en un solo audio)
+
+```mermaid
+flowchart TD
+    A([Audio recibido\nWhisper transcribe]) --> B["texto_a_colores(texto)"]
+    B --> C{colores\ndetectados}
+
+    C -->|0 colores| D["texto_a_comando(texto)\ncamino normal"]
+    C -->|1 color| D
+    C -->|≥ 2 colores| E["juego.procesar_colores_multiples(colores)"]
+
+    E --> F{Para cada color\nen orden}
+
+    F -->|Color == esperado| G[pos_escuchar++\naceptados++]
+    G --> H{¿Secuencia\ncompleta?}
+    H -->|No| F
+    H -->|Sí| I[CORRECT → LEVEL_UP\nTTS: Correcto.]
+
+    F -->|Color != esperado| J[WRONG → GAME_OVER\nTTS: Incorrecto.]
+    F -->|Lista agotada\nsin error| K{aceptados > 0?}
+
+    K -->|Sí| L["on_resultado(CORRECT)\n→ LISTENING\nTTS: N colores correctos. Tu turno."]
+    K -->|No| M[_empezar_escucha\nsin resultado]
+```
+
+### Reglas de corte en `texto_a_colores()`
+
+| Texto de Whisper | Resultado | Razón |
+|-----------------|-----------|-------|
+| `"azul rojo rojo amarillo"` | `[AZUL, ROJO, ROJO, AMARILLO]` | Todo reconocido |
+| `"adul dojo amadillo"` | `[AZUL, ROJO, AMARILLO]` | Fuzzy matching |
+| `"azul rojo sdadsa verde"` | `[AZUL, ROJO]` | Para en sdadsa |
+| `"sdadsa rojo rojo"` | `[]` | Primera palabra falla → camino normal |
+| `"reiniciar"` | `[]` | No es color → `texto_a_comando` → REINICIAR |
+| `"azul"` (solo 1) | `[AZUL]` → usa camino normal | < 2 colores |
 
 ---
 
@@ -205,8 +266,26 @@ flowchart LR
 | Audio proc | `audio-proc` (spawneado) | Recibe PCM, llama Whisper |
 | Whisper | `whisper-transcribe` | Transcripción (con timeout 10s) |
 | TTS worker | `tts-worker` | Reproduce cola TTS |
-| Tick | `tick` | Verifica timeout del turno cada 200ms |
+| Tick | `tick` | Verifica timeout del turno cada 200ms; detecta transiciones TTS → notifica panel |
 | Secuencia | `seq` | Muestra LEDs de la secuencia (bloqueante) |
 | Nivel up | `nivel-up` | Delay 0.6s → nuevo nivel |
 | Game over | `gameover` | Delay 0.8s → GAME_OVER |
 | Bienvenida | `bienvenida` | TTS de bienvenida al conectar |
+
+---
+
+## OLED del ESP32 — Mensajes por estado
+
+| Estado | Línea 1 | Línea 2 | Línea 3 |
+|--------|---------|---------|---------|
+| IDLE | Simon Dice | Di EMPIEZA | para comenzar |
+| SHOWING_SEQUENCE | MOSTRANDO | secuencia | — |
+| LISTENING | TU TURNO | Nv2 Pts:10 1/2 | Presiona ESPACIO |
+| EVALUATING | Procesando... | Whisper | — |
+| CORRECT | CORRECTO! | — | — |
+| LEVEL_UP | NIVEL 3! | Puntos: 20 | Bien hecho! |
+| WRONG | INCORRECTO | — | — |
+| GAME_OVER | GAME OVER | — | Di EMPIEZA |
+| PAUSA | PAUSA | Di EMPIEZA | para continuar |
+
+*LISTENING es dinámico: nivel y puntuación actuales, posición en secuencia.*

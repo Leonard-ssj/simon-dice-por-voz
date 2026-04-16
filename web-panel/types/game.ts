@@ -30,7 +30,8 @@ export type MensajeWS =
   | { tipo: "score"; puntuacion: number; raw: string; ts: number }
   | { tipo: "gameover"; raw: string; ts: number }
   | { tipo: "voz"; texto: string; comando: string; raw?: string; ts: number }
-  | { tipo: "log"; raw: string; ts: number };
+  | { tipo: "log"; raw: string; ts: number }
+  | { tipo: "tts"; activo: boolean; ts: number };
 
 // Estado completo del juego en el cliente
 export interface EstadoCliente {
