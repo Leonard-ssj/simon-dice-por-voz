@@ -1,9 +1,0 @@
-# Dependencias del servidor TTS para ESP32-S3
-# Instalar con:  pip install -r requirements.txt
-
-flask>=3.0.0
-piper-tts>=1.2.0
-requests>=2.31.0
-littlefs-python>=0.12.0
-esptool>=4.7.0
-pyserial>=3.5
