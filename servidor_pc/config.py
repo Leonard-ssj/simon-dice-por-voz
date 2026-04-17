@@ -37,7 +37,9 @@ VOLUMEN_TONOS = 0.3    # 0.0 – 1.0
 
 # ─── Juego ────────────────────────────────────────────────────────────────────
 TIMEOUT_RESPUESTA = 60000   # ms — tiempo por turno para responder (60s para CPUs lentas con Whisper small)
-DURACION_LED_SIM  = 800     # ms — tiempo que cada LED permanece encendido
+DURACION_LED_SIM  = 100     # ms — margen adicional DESPUÉS de que el ESP32 envía VOZ_FIN
+                            #      El LED real permanece encendido = duración del audio (~850-1150ms)
+                            #      + estos 100ms de buffer antes de enviar LED:OFF
 PAUSA_ENTRE_LEDS  = 300     # ms — pausa entre LEDs al mostrar la secuencia
 NIVEL_INICIAL     = 1
 MAX_NIVEL         = 20

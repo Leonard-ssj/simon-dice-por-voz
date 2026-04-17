@@ -1,7 +1,11 @@
 # Simon Dice — Guión completo del narrador
 
-Todo lo que dice el narrador TTS (voz `es-MX-DaliaNeural` / SAPI español),
-en el orden exacto en que ocurre durante una partida.
+Todo lo que dice el narrador, en el orden exacto en que ocurre durante una partida.
+
+> **Arquitectura de audio:** toda la voz y los sonidos salen por la **bocina MAX98357A
+> del ESP32** (GPIO15 BCLK / GPIO16 LRC / GPIO17 DIN, 22 050 Hz mono 16-bit).
+> Los 59 archivos PCM están almacenados en la partición LittleFS "audio" del flash.
+> La laptop **no emite ningún sonido** — `edge-tts` y `sounddevice` ya no se usan.
 
 ---
 
@@ -201,17 +205,19 @@ Si el jugador falla **dentro** de un nivel, acumula únicamente los puntos de lo
 | "N colores correctos. Tu turno." | 13 |
 | "Nivel N." | 14 |
 | "Fin del juego. Obtuviste N puntos." | 16 |
-| **Total audios únicos posibles** | **59** |
+| **Total audios unicos posibles** | **59** |
 
-> El TTS genera todos en tiempo real — no se pre-graban.
-> Este conteo es útil si en el futuro se quisiera cambiar a audios
-> pre-grabados para eliminar la dependencia de internet/SAPI.
+> Los 59 archivos PCM estan pre-generados con Piper TTS (voz `es_MX-claude-high`)
+> y almacenados en la particion LittleFS "audio" del ESP32.
+> Se suben una sola vez con `test_bocina/subir_audio.py`.
 
 ---
 
-## Notas técnicas
+## Notas tecnicas
 
-- El narrador **no habla** mientras se muestra la secuencia — `"Mira y escucha."` se encola antes y el TTS bloquea el PTT hasta que termina.
-- El timer de turno **se congela** mientras el narrador habla; el jugador no pierde tiempo de respuesta durante la narración.
-- Los comandos `REINICIAR` y `PARA` cancelan inmediatamente cualquier narración pendiente en la cola.
-- La voz preferida es `es-MX-DaliaNeural` (edge-tts, requiere internet); si no está disponible, usa la voz SAPI española instalada en Windows.
+- El narrador **no habla** mientras se muestra la secuencia — `"Mira y escucha."` se reproduce en el ESP32 y `servidor.py` **bloquea** hasta recibir `VOZ_FIN` antes de enviar los comandos `LED:`.
+- El timer de turno **se congela** mientras el ESP32 habla (`_voz_esp32_activa` en `tts.py`); el jugador no pierde tiempo durante la narracion.
+- Los comandos `REINICIAR` y `PARA` llaman `cancelar_voz_esp32()` para liberar la espera inmediatamente.
+- La bocina del ESP32 bloquea el PTT mientras reproduce (`_reproduciendo=true` en firmware); el microfono no puede iniciar grabacion durante la narracion.
+- Protocolo: `VOZ:nombre` (PC->ESP32), `SONIDO:tipo` (PC->ESP32 para fanfarrias), `VOZ_FIN` (ESP32->PC al terminar).
+- Los colores **no envian `VOZ_FIN`** al PC — el timing lo cubre el `sleep` de 800 ms del juego entre LEDs.

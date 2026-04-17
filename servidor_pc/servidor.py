@@ -139,6 +139,8 @@ def _on_estado(estado: Estado):
     if estado == Estado.SHOWING_SEQUENCE:
         serial.enviar_voz("mira_escucha")
         activar_voz_esp32()
+        esperar_voz_fin(timeout=5.0)   # bloquea hasta que el ESP32 termine "mira_escucha"
+                                       # antes de enviar los LED: de la secuencia
 
     elif estado == Estado.LISTENING:
         if _estado_previo == Estado.EVALUATING:
@@ -188,8 +190,12 @@ def _on_estado(estado: Estado):
 
 def _on_led_encender(color: str):
     log(f"[LED] Encender: {color}", "sistema")
-    serial.enviar_led(color)
-    ws.enviar_led_activo(color)
+    # Preparar event ANTES de enviar el comando (evita race si VOZ_FIN llega muy rápido)
+    activar_voz_esp32(timeout_s=3.0)
+    serial.enviar_led(color)        # ESP32: RGB on + tono + voz del color
+    ws.enviar_led_activo(color)     # panel web: LED on
+    esperar_voz_fin(timeout=3.0)    # bloquea hasta que el ESP32 termina el audio
+                                    # → panel web y RGB apagan juntos con DURACION_LED de margen
 
 
 def _on_led_apagar(color: str):
@@ -511,6 +517,18 @@ def _on_voz_fin():
     notificar_voz_fin()
 
 
+# ─── Callbacks LittleFS ──────────────────────────────────────────────────────
+
+def _on_littlefs_ok(n: int):
+    log(f"[LittleFS] {n} archivos PCM listos en el ESP32", "ok")
+
+def _on_littlefs_vacio():
+    log("[LittleFS] ADVERTENCIA: partición de audio vacía", "error")
+    log("           Ejecutar para subir el audio:", "error")
+    log("           cd test_bocina && python subir_audio.py", "error")
+    ws.enviar_log("[LittleFS] Sin audio — ejecutar test_bocina/subir_audio.py")
+
+
 # ─── Registro de callbacks ───────────────────────────────────────────────────
 
 def _registrar_callbacks():
@@ -528,13 +546,15 @@ def _registrar_callbacks():
     juego.on_log           = _on_log
 
     # ESP32 Serial → servidor
-    serial.on_ready          = _on_esp32_ready
-    serial.on_ptt_start      = _on_ptt_start
-    serial.on_ptt_stop       = _on_ptt_stop
-    serial.on_audio_recibido = _on_audio_recibido
-    serial.on_audio_corto    = _on_audio_corto
-    serial.on_voz_fin        = _on_voz_fin           # ESP32 terminó de hablar
-    serial.on_log            = _on_log
+    serial.on_ready           = _on_esp32_ready
+    serial.on_ptt_start       = _on_ptt_start
+    serial.on_ptt_stop        = _on_ptt_stop
+    serial.on_audio_recibido  = _on_audio_recibido
+    serial.on_audio_corto     = _on_audio_corto
+    serial.on_voz_fin         = _on_voz_fin           # ESP32 terminó de hablar
+    serial.on_littlefs_ok     = _on_littlefs_ok       # N archivos PCM confirmados
+    serial.on_littlefs_vacio  = _on_littlefs_vacio    # partición vacía — falta subir audio
+    serial.on_log             = _on_log
 
     # Panel web → servidor
     ws.on_ptt_inicio           = _iniciar_ptt_con_check     # pre-check → 'R' al ESP32 solo si OK

@@ -83,6 +83,8 @@ class SerialBridge:
         self.on_audio_corto:     callable | None = None   # ()
         self.on_log:             callable | None = None   # (str)
         self.on_voz_fin:         callable | None = None   # () → ESP32 terminó de hablar
+        self.on_littlefs_ok:     callable | None = None   # (int n) → N archivos PCM listos
+        self.on_littlefs_vacio:  callable | None = None   # () → partición vacía, falta subir audio
 
         self._ready_event = threading.Event()
 
@@ -238,6 +240,18 @@ class SerialBridge:
             # El ESP32 terminó de reproducir el audio solicitado por VOZ:
             if self.on_voz_fin:
                 self.on_voz_fin()
+
+        elif linea.startswith("LITTLEFS_OK:"):
+            try:
+                n = int(linea.split(":")[1])
+                if self.on_littlefs_ok:
+                    self.on_littlefs_ok(n)
+            except (ValueError, IndexError):
+                pass
+
+        elif linea == "LITTLEFS_VACIO":
+            if self.on_littlefs_vacio:
+                self.on_littlefs_vacio()
 
         else:
             # Línea de log del firmware (Serial.printf durante tests, etc.)

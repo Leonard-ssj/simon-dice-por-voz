@@ -1,185 +1,259 @@
 # Setup — Simon Dice por Voz
 
-## Requisitos generales
-
-| Herramienta | Versión mínima | Para qué |
-|---|---|---|
-| Node.js | 18 | Web Panel |
-| npm | 9 | Web Panel |
-| Chrome o Edge | cualquiera | Web Panel (Web Serial API + Whisper WASM) |
-| Python | 3.10 | Solo para el simulador PC |
+Guia completa para ejecutar el juego desde cero.
 
 ---
 
-## Modo SIMULADOR — Sin hardware (disponible ahora)
+## Requisitos previos
 
-El simulador corre el juego completo en tu PC: motor de juego, LEDs en terminal,
-tonos y narración TTS por el speaker. El micrófono lo abre Python directamente.
+| Herramienta | Version minima | Para que |
+|---|---|---|
+| Python | 3.10 | Servidor PC (Whisper + Serial + WebSocket) |
+| Node.js | 18 | Web Panel |
+| npm | 9 | Web Panel |
+| Chrome o Edge | cualquiera | Web Panel (Web Serial API) |
+| Arduino IDE | 2.x | Flashear firmware al ESP32 |
+| Hardware | Kit OKYN-G5806 | ESP32-S3-N16R8 + MAX98357A + INMP441 + OLED |
 
-### 1. Instalar dependencias Python
+---
+
+## Modo SERVIDOR PC (con ESP32 por USB)
+
+Este es el modo principal del proyecto.
+El ESP32 maneja todo el audio (voz + tonos) por su bocina MAX98357A.
+Python corre Whisper localmente para reconocer voz.
+
+### 1. Clonar el repositorio
+
+```bash
+git clone <url-del-repo>
+cd sistemas-inteligentes
+```
+
+### 2. Crear el entorno virtual e instalar dependencias
+
+**Opcion A — Script automatico (recomendado):**
+
+```bat
+cd servidor_pc
+setup.bat
+```
+
+El script crea `.venv/` en `servidor_pc/`, instala todas las dependencias
+y verifica que los modulos carguen correctamente.
+
+**Opcion B — Manual:**
+
+```bash
+cd servidor_pc
+python -m venv .venv
+
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+> El entorno virtual aísla las dependencias del proyecto del Python global.
+> `.venv/` está en `.gitignore` y no se sube al repositorio.
+
+Dependencias instaladas:
+- `openai-whisper` — reconocimiento de voz local (modelo `small`, ~244 MB, se descarga automatico)
+- `pyserial` — comunicacion con el ESP32 por USB
+- `websockets` — servidor WebSocket hacia el browser
+- `numpy`, `scipy`, `noisereduce` — procesamiento de audio
+- `sounddevice` — captura de audio del microfono (solo simulador)
+
+### 3. Preparar los audios PCM (Piper TTS)
+
+Los 59 archivos PCM del narrador se generan con Piper TTS y se suben al ESP32.
+
+**3a. Instalar Piper** (solo la primera vez):
+
+Descargar `piper` para Windows desde:
+`https://github.com/rhasspy/piper/releases`
+
+Descomprimir en `test_bocina/piper/` de modo que exista:
+```
+test_bocina/piper/piper.exe
+```
+
+**3b. Descargar el modelo de voz**:
+
+Descargar `es_MX-claude-high.onnx` y su `.json` desde el repositorio de modelos de Piper.
+Colocarlos en `test_bocina/`:
+```
+test_bocina/es_MX-claude-high.onnx
+test_bocina/es_MX-claude-high.onnx.json
+```
+
+**3c. Generar los audios**:
+
+```bash
+cd test_bocina
+python preparar_datos.py
+```
+
+Esto crea los 59 archivos `.pcm` en `test_bocina/speaker_test/data/`.
+
+### 4. Subir los audios al ESP32
+
+**Cerrar el Serial Monitor del Arduino IDE antes de continuar.**
+
+```bash
+cd test_bocina
+pip install littlefs-python esptool
+python subir_audio.py
+```
+
+El script detecta automaticamente el puerto COM del ESP32.
+Si hay varios puertos, te pedira elegir.
+La subida tarda ~30-60 segundos.
+
+> Este paso solo es necesario la primera vez, o si se actualiza el vocabulario de voz.
+> El servidor verifica automaticamente al arrancar: si los audios no estan,
+> imprime una advertencia con las instrucciones en la terminal.
+
+### 5. Flashear el firmware al ESP32
+
+Abrir `firmware/proyecto/proyecto.ino` en Arduino IDE.
+
+Configuracion en `Herramientas`:
+
+| Opcion | Valor |
+|---|---|
+| Board | ESP32S3 Dev Module |
+| PSRAM | OPI PSRAM |
+| Flash Size | 16MB (128Mb) |
+| Partition Scheme | Custom (usa `firmware/proyecto/partitions.csv`) |
+| USB CDC on Boot | Enabled |
+| Upload Speed | 921600 |
+
+Hacer **Upload** (Ctrl+U).
+
+> **Importante:** La particion "audio" de LittleFS **no se borra** al flashear el firmware.
+> Los audios subidos en el paso 4 permanecen intactos.
+
+### 6. Instalar y correr el Web Panel
+
+```bash
+cd web-panel
+npm install
+npm run dev
+```
+
+Panel disponible en `http://localhost:3000`.
+
+### 7. Correr el servidor
+
+**Opcion A — Script de inicio (recomendado):**
+
+```bat
+cd servidor_pc
+iniciar.bat
+```
+
+**Opcion B — Manual con venv activo:**
+
+```bash
+cd servidor_pc
+
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+python servidor.py
+```
+
+Veras en la terminal:
+```
+==========================================================
+   SIMON DICE POR VOZ - Servidor PC
+==========================================================
+  1. El ESP32 debe estar conectado por USB.
+  2. Abrir Chrome o Edge en:
+     http://localhost:3000
+  3. Seleccionar el tab  'Servidor PC'
+  4. Hacer clic en 'Conectar'  <- el juego inicia aqui
+  5. Presionar ESPACIO y hablar
+==========================================================
+
+[1/4] Cargando Whisper...
+[2/4] Conectando al ESP32...
+[Serial] ESP32 listo (READY recibido).
+[LittleFS] 59 archivos PCM listos en el ESP32
+[3/4] Iniciando servidor WebSocket...
+[4/4] Registrando callbacks - esperando conexion del panel web...
+```
+
+La bocina del ESP32 dira **"Servidor listo"** al arrancar.
+
+### 8. Conectar y jugar
+
+1. Abre **Chrome o Edge** en `http://localhost:3000`
+2. Selecciona el tab **"Servidor PC"**
+3. Haz clic en **"Conectar"**
+4. La bocina del ESP32 dira **"Simon Dice listo"**
+5. Presiona `ESPACIO` y di **"empieza"**
+6. Repite los colores: **"rojo"**, **"verde"**, **"azul"**, **"amarillo"**
+
+> **PTT:** mantiene presionado `ESPACIO` mientras hablas, suelta al terminar.
+> El servidor graba el audio y Whisper lo transcribe localmente.
+
+---
+
+## Modo SIMULADOR (sin ESP32, para desarrollo)
+
+Corre el juego completo en la PC sin hardware. El audio sale por los speakers de la laptop.
+
+### 1. Instalar dependencias
 
 ```bash
 cd tests/simulador_pc
 pip install -r requirements_test.txt
 ```
 
-Instala:
-- `sounddevice` — tonos del juego y captura del micrófono (PTT)
-- `numpy` — procesamiento de audio
-- `websockets` — servidor WebSocket hacia el browser
-- `pyttsx3` — detecta voces instaladas en Windows (solo enumeración)
-- `openai-whisper` — reconocimiento de voz local (modelo `small`, ~244 MB, se descarga automático)
-- `edge-tts` — voz neural mexicana `es-MX-DaliaNeural` para el narrador (requiere internet)
-- `pygame` — reproducción del audio de edge-tts
-
-> **Nota:** `edge-tts` y `pygame` son opcionales. Si no están, el narrador usa
-> las voces SAPI instaladas en Windows (PowerShell). Si no hay voz en español,
-> el narrador suena en inglés.
-
-### 2. Instalar y correr el Web Panel
+### 2. Correr el simulador
 
 ```bash
-cd web-panel
-npm install
-npm run dev
-```
-
-Panel disponible en `http://localhost:3000`
-
-### 3. Correr el simulador
-
-```bash
-cd tests/simulador_pc
 python main.py
 ```
 
-Verás en la terminal:
-```
-=======================================================
-  SIMON DICE POR VOZ — Simulador PC (modo TEST)
-=======================================================
-[TTS] Edge TTS activo — voz neural: es-MX-DaliaNeural
-[WS] Cargando Whisper 'small'...
-[WS] Whisper 'small' listo.
-[WS] Servidor en ws://localhost:8765
-  Simulador listo. Esperando conexion del panel web...
-```
+### 3. Conectar el panel
 
-### 4. Conectar el panel y jugar
-
-1. Abre **Chrome o Edge** en `http://localhost:3000`
-2. Selecciona **"Simulador — WebSocket"** (ya está seleccionado por defecto)
-3. Click **"Conectar"**
-4. El panel mostrará en la barra: micrófono, bocina y modelo Whisper activos
-5. El narrador dirá: *"Presiona el botón del micrófono o la barra espaciadora y di empieza para comenzar"*
-6. Presiona `ESPACIO` o el botón 🎤 y di **"empieza"**
-7. Repite los colores: **"rojo"**, **"verde"**, **"azul"**, **"amarillo"**
-
-> **PTT — Push to Talk:** mantén presionado `ESPACIO` o el botón 🎤 mientras hablas.
-> Suéltalo cuando termines. Python graba el audio y Whisper lo transcribe.
-> El narrador dirá **"Correcto"** cuando aciertes y el nivel cuando subas.
-
-### Detección automática de Whisper
-
-Al conectar, el panel muestra qué Whisper está en uso:
-
-| Badge en panel | Qué significa |
-|---|---|
-| 🔵 **Whisper local** | Python captura el mic y transcribe con Whisper local |
-| 🟢 **Whisper listo** | WASM cargado en el browser (fallback) |
-| 🟡 **Descargando modelo...** | WASM descargándose (~125 MB, primera vez) |
-
-### Comandos de voz reconocidos
-
-| Dices | Comando | Válido en |
-|---|---|---|
-| empieza / inicia / comienza | START | IDLE, GAMEOVER, PAUSA |
-| rojo / roja / roxo | ROJO | LISTENING |
-| verde / berde / verd | VERDE | LISTENING |
-| azul / asul / azur | AZUL | LISTENING |
-| amarillo / amarilla / amarijo | AMARILLO | LISTENING |
-| repite / de nuevo / otra vez | REPITE | LISTENING |
-| pausa / pausar / espera | PAUSA | LISTENING |
-| para / stop / termina | STOP | cualquier momento |
-| reinicia / reiniciar / reset | REINICIAR | GAMEOVER |
+1. Abre Chrome o Edge en `http://localhost:3000`
+2. Selecciona **"Simulador - WebSocket"**
+3. Haz clic en **"Conectar"**
 
 ---
 
-## Modo HARDWARE — Con ESP32
+## Deploy del Web Panel en Vercel
 
-Requiere el kit OKYN-G5806 (ESP32-S3 + INMP441 + MAX98357A) conectado por USB.
-**No se necesita instalar Python** — solo Chrome o Edge.
-
-### 1. Flashear el firmware
-
-```
-Arduino IDE:
-  Board:        ESP32S3 Dev Module
-  Upload Speed: 921600
-  Flash Size:   16MB
-```
-
-**Antes de compilar:** verificar pines en:
-- `firmware/led_control.h` — `PIN_LED_ROJO`, `PIN_LED_VERDE`, `PIN_LED_AZUL`, `PIN_LED_AMARILLO`
-- `firmware/audio_capture.h` — `I2S_SCK_PIN`, `I2S_WS_PIN`, `I2S_SD_PIN`
-- `firmware/sound_control.h` — `PIN_SPEAKER_PWM`
-
-Abrir `firmware/simon_dice.ino` en Arduino IDE y hacer Upload.
-
-### 2. Abrir el Web Panel
-
-Opción A — Local:
-```bash
-cd web-panel
-npm install
-npm run dev
-# Abrir http://localhost:3000 en Chrome o Edge
-```
-
-Opción B — Producción (Vercel):
-```bash
-cd web-panel
-npx vercel
-# El panel queda en la nube, accesible desde cualquier Chrome/Edge
-```
-
-### 3. Conectar y jugar
-
-1. Conecta el ESP32 al USB
-2. Abre el panel en Chrome o Edge
-3. Selecciona **"ESP32 — Web Serial"**
-4. Click **"Conectar"** → selecciona el puerto serial del ESP32
-5. Espera el badge **"Whisper listo"** (~125 MB primera descarga, luego desde caché)
-6. Presiona `ESPACIO` o el botón 🎤, di **"empieza"** → juega
-
-> **Requisito:** Web Serial API solo funciona en Chrome y Edge.
-> Firefox, Safari y otros browsers no son compatibles.
-
----
-
-## Deploy en Vercel
+El panel puede desplegarse en la nube. La conexion al ESP32 y el reconocimiento de voz ocurren en el browser del usuario (client-side).
 
 ```bash
 cd web-panel
 npx vercel
 ```
 
-El panel vive en la nube. La conexión al ESP32 y el reconocimiento de voz ocurren
-completamente en el browser del usuario (client-side). No hay backend en Vercel.
-
 ---
 
-## Solución de problemas
+## Solucion de problemas
 
-| Problema | Causa probable | Solución |
+| Problema | Causa probable | Solucion |
 |---|---|---|
-| "Web Serial no disponible" | Browser no es Chrome/Edge | Usar Chrome o Edge |
-| El panel no se conecta al simulador | El simulador no está corriendo | Ejecutar `python main.py` primero |
-| Whisper no reconoce lo que dices | Habla despacio y claro | Revisar volumen del micrófono en el SO |
-| `RuntimeError: Event loop is closed` en terminal | Advertencia benigna de Windows/asyncio | Ya corregido — ignorar |
-| Error 503 en edge-tts | Sin internet o servicio no disponible | Cae automáticamente a SAPI; sin impacto |
-| Narrador TTS habla en inglés (SAPI) | No hay voz en español instalada | Configuración → Hora e idioma → Voz → Agregar voces (buscar Sabina o Helena) |
-| "Cargando modelo..." no termina (WASM) | Conexión a internet lenta | Esperar (solo la primera vez, ~125 MB) |
-| El ESP32 no aparece en la lista de puertos | Driver no instalado o cable solo carga | Usar cable de datos, instalar driver CP210x o CH340 |
-| PTT no funciona (botón no responde) | Simulador no envió READY | Reconectar; verificar que el simulador Python esté corriendo |
-| El narrador no dice "Correcto" | Versión antigua del simulador | Actualizar con `git pull` y reiniciar `python main.py` |
+| `[LittleFS] ADVERTENCIA: particion vacia` | Audios no subidos | `cd test_bocina && python subir_audio.py` |
+| `[Serial] No se encontro ningun puerto serial` | ESP32 no conectado o driver faltante | Conectar USB, instalar driver CP210x o CH340 |
+| `[ERROR] No se pudo cargar Whisper` | openai-whisper no instalado | Ejecutar `setup.bat` de nuevo |
+| El ESP32 no aparece en puertos | Cable solo de carga | Usar cable USB con datos |
+| La bocina no suena | Audios no subidos o pines incorrectos | Verificar paso 4; pines: BCLK=15, LRC=16, DIN=17 |
+| Serial Monitor bloquea la subida | Arduino IDE Serial Monitor abierto | Cerrar Serial Monitor antes de `subir_audio.py` |
+| "Web Serial no disponible" | Firefox o Safari | Usar Chrome o Edge |
+| Whisper no reconoce el color | Habla despacio y cerca del microfono | Reducir ruido ambiente, verificar microfono en el SO |
+| El panel web muestra los LEDs desincronizados | Firmware viejo sin `VOZ_FIN` para colores | Reflashear el firmware actual |
+| LittleFS ERROR en OLED | Partition Scheme incorrecto | Elegir "Custom" en Arduino IDE (usa `partitions.csv`) |
+| `ModuleNotFoundError` al correr servidor | venv no activado | Usar `iniciar.bat` o activar `.venv` manualmente |
+| El venv no existe | `setup.bat` no ejecutado | `cd servidor_pc && setup.bat` |

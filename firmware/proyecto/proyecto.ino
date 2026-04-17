@@ -225,8 +225,26 @@ void setup_littlefs() {
   // Partición "audio" definida en partitions.csv (0x310000, 13.5 MB)
   if (!LittleFS.begin(false, "/littlefs", 10, "audio")) {
     Serial.println("[LittleFS] ERROR: no se pudo montar la particion audio");
-    oled_mostrar("LittleFS ERROR", "Sin audio", "Reflashear");
+    Serial.println("LITTLEFS_VACIO");
+    oled_mostrar("LittleFS ERROR", "Sin audio", "subir_audio.py");
+    return;
+  }
+  // Contar archivos .pcm para verificar que el audio fue subido
+  int n = 0;
+  File dir = LittleFS.open("/");
+  while (true) {
+    File f = dir.openNextFile();
+    if (!f) break;
+    String nombre = String(f.name());
+    if (nombre.endsWith(".pcm")) n++;
+    f.close();
+  }
+  dir.close();
+  if (n == 0) {
+    Serial.println("LITTLEFS_VACIO");
+    oled_mostrar("Sin audio PCM", "Ejecutar:", "subir_audio.py");
   } else {
+    Serial.printf("LITTLEFS_OK:%d\n", n);
     Serial.println("[LittleFS] OK");
   }
 }
@@ -524,10 +542,12 @@ void procesar_linea(const String& linea) {
       char buf[20];
       snprintf(buf, sizeof(buf), "COLOR: %s", color.c_str());
       oled_mostrar(buf, "", "");
-      // Tono del color (350ms) — Python espera DURACION_LED=800ms antes del siguiente LED
+      // Tono del color (350ms)
       play_color_tone(color.c_str());
-      // Voz del color ("rojo", "verde"…) desde LittleFS — no notifica VOZ_FIN al PC
-      // porque el timing lo cubre el sleep de 800ms del juego (tono+voz ≈ 650ms < 800ms)
+      // Voz del color ("rojo", "verde"…) desde LittleFS
+      // notificar=true → envía VOZ_FIN al PC cuando termina.
+      // Python espera ese VOZ_FIN en _on_led_encender() antes de apagar el LED,
+      // así el panel web, el RGB y el OLED quedan perfectamente sincronizados.
       VozID idColor = VOZ_COUNT;
       if      (color == "ROJO")     idColor = VOZ_COLOR_ROJO;
       else if (color == "VERDE")    idColor = VOZ_COLOR_VERDE;
@@ -535,7 +555,7 @@ void procesar_linea(const String& linea) {
       else if (color == "AMARILLO") idColor = VOZ_COLOR_AMARILLO;
       if (idColor < VOZ_COUNT) {
         _reproduciendo = true;
-        reproducir_voz(idColor, false);   // notificar=false → sin VOZ_FIN al PC
+        reproducir_voz(idColor, true);    // notificar=true → envía VOZ_FIN al terminar
       }
     }
     return;
