@@ -82,6 +82,7 @@ class SerialBridge:
         self.on_audio_recibido:  callable | None = None   # (bytes pcm)
         self.on_audio_corto:     callable | None = None   # ()
         self.on_log:             callable | None = None   # (str)
+        self.on_voz_fin:         callable | None = None   # () → ESP32 terminó de hablar
 
         self._ready_event = threading.Event()
 
@@ -233,6 +234,11 @@ class SerialBridge:
             # Esta línea es solo el terminador textual del ESP32.
             pass
 
+        elif linea == "VOZ_FIN":
+            # El ESP32 terminó de reproducir el audio solicitado por VOZ:
+            if self.on_voz_fin:
+                self.on_voz_fin()
+
         else:
             # Línea de log del firmware (Serial.printf durante tests, etc.)
             if self.on_log:
@@ -250,6 +256,14 @@ class SerialBridge:
                 print(f"  [→ ESP32] {texto}")
         except serial.SerialException as e:
             print(f"[Serial] Error al enviar: {e}")
+
+    def enviar_voz(self, nombre: str):
+        """Ordena al ESP32 reproducir un audio por nombre (ej: 'turno', 'correcto')."""
+        self._enviar(f"VOZ:{nombre}")
+
+    def enviar_sonido(self, tipo: str):
+        """Ordena al ESP32 reproducir una fanfarria de tonos (correcto|error|inicio|gameover)."""
+        self._enviar(f"SONIDO:{tipo}")
 
     def enviar_led(self, color: str):
         """Enciende el RGB con el color indicado. color="OFF" para apagar."""

@@ -61,6 +61,52 @@ _voz_nombre  = ""
 _usar_edge   = False
 _edge_loop: asyncio.AbstractEventLoop | None = None
 
+# ─── Estado de voz ESP32 ─────────────────────────────────────────────────────
+# Estas variables rastrean si el ESP32 está reproduciendo audio.
+# El _hilo_tick de servidor.py consulta tts_hablando() para pausar/reanudar
+# el timer del juego y el countdown del panel web.
+_voz_esp32_activa = threading.Event()   # set mientras el ESP32 está hablando
+_voz_fin_event    = threading.Event()   # se dispara al recibir VOZ_FIN del ESP32
+
+
+def activar_voz_esp32(timeout_s: float = 8.0):
+    """
+    Marca al ESP32 como "hablando". El timer del juego se pausa automáticamente.
+    Auto-limpia si no llega VOZ_FIN en timeout_s (protección ante desconexión).
+    """
+    _voz_esp32_activa.set()
+    _voz_fin_event.clear()
+
+    def _auto_clear():
+        time.sleep(timeout_s)
+        _voz_esp32_activa.clear()
+        _voz_fin_event.set()
+
+    threading.Thread(target=_auto_clear, daemon=True, name="voz-timeout").start()
+
+
+def notificar_voz_fin():
+    """Llamar cuando el ESP32 envía VOZ_FIN. Reanuda el timer del juego."""
+    _voz_esp32_activa.clear()
+    _voz_fin_event.set()
+
+
+def esperar_voz_fin(timeout: float = 8.0):
+    """
+    Bloquea hasta que el ESP32 termina de hablar o expira el timeout.
+    Usar en hilos de narración secuencial (GAME_OVER, WRONG, TIMEOUT).
+    """
+    _voz_fin_event.wait(timeout=timeout)
+
+
+def cancelar_voz_esp32():
+    """
+    Descarta cualquier espera de VOZ_FIN inmediatamente.
+    Usar en REINICIAR, STOP o desconexión del panel.
+    """
+    _voz_esp32_activa.clear()
+    _voz_fin_event.set()
+
 
 # ─── Detección de voz SAPI en español ────────────────────────────────────────
 
@@ -225,8 +271,8 @@ def esperar_tts(timeout: float = 5.0) -> bool:
 
 
 def tts_hablando() -> bool:
-    """True si el narrador está hablando, tiene items pendientes, o está en buffer de eco."""
-    return _tts_activo.is_set() or not _tts_queue.empty()
+    """True si el narrador está hablando (laptop TTS o bocina ESP32) o hay items pendientes."""
+    return _tts_activo.is_set() or not _tts_queue.empty() or _voz_esp32_activa.is_set()
 
 
 def cancelar_tts():

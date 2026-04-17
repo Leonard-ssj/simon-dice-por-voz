@@ -54,8 +54,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_NeoPixel.h>
-#include <driver/i2s.h>   // MAX98357A I2S speaker
+#include <driver/i2s.h>   // MAX98357A I2S speaker (legacy API)
 #include <math.h>
+#include "FS.h"
+#include "LittleFS.h"
+#include "narradora.h"
 
 // ─── Pines — micrófono + OLED + RGB + botón ───────────────────────────────────
 #define MIC_OUT_PIN   4      // MAX4466 OUT — ADC1_CH3
@@ -79,10 +82,10 @@
 //   MAX98357A GAIN → libre    (= 15dB default)
 //   MAX98357A SD   → libre    (= encendido)
 //   MAX98357A +/-  → altavoz 4-8Ω
-#define SPEAKER_WS    5      // LRC
-#define SPEAKER_BCK   6      // BCLK
-#define SPEAKER_DATA  7      // DIN
-#define SPEAKER_RATE  16000  // Hz — Whisper usa 16kHz, misma tasa para el speaker
+#define SPEAKER_WS    16     // LRC  — confirmado en test_bocina
+#define SPEAKER_BCK   15     // BCLK — confirmado en test_bocina
+#define SPEAKER_DATA  17     // DIN  — confirmado en test_bocina
+#define SPEAKER_RATE  22050  // Hz — coincide con los PCM de LittleFS (22050 Hz)
 #define I2S_PORT      I2S_NUM_0
 
 // ─── Audio de captura (MAX4466 → ADC) ────────────────────────────────────────
@@ -126,6 +129,10 @@ static float lx1, lx2, ly1, ly2;   // LPF 3400Hz
 // Buffer acumulador de líneas Serial entrantes (comandos del PC)
 static String serial_buf = "";
 
+// ── Audio LittleFS ────────────────────────────────────────────────────────────
+static bool    _reproduciendo = false;  // true mientras el ESP32 habla (bloquea PTT)
+static uint8_t _pcmBuf[4096];          // buffer reutilizable para lectura de flash
+
 // ─── Prototipos ───────────────────────────────────────────────────────────────
 void oled_mostrar(const char* l1, const char* l2 = "", const char* l3 = "");
 void rgb_color(const char* nombre);
@@ -136,8 +143,11 @@ void enviar_audio();
 void procesar_serial_entrada();
 void procesar_linea(const String& linea);
 void setup_speaker();
+void setup_littlefs();
 void play_tone(int freq_hz, int dur_ms, int vol = 22000);
 void play_color_tone(const char* color);
+void reproducir_voz(VozID id, bool notificar = true);
+VozID nombre_a_vozid(const String& nombre);
 
 // =============================================================================
 //  MAX98357A — Configurar I2S para salida de audio
@@ -209,6 +219,81 @@ void play_color_tone(const char* color) {
 }
 
 // =============================================================================
+//  LittleFS — montar la partición de audio
+// =============================================================================
+void setup_littlefs() {
+  // Partición "audio" definida en partitions.csv (0x310000, 13.5 MB)
+  if (!LittleFS.begin(false, "/littlefs", 10, "audio")) {
+    Serial.println("[LittleFS] ERROR: no se pudo montar la particion audio");
+    oled_mostrar("LittleFS ERROR", "Sin audio", "Reflashear");
+  } else {
+    Serial.println("[LittleFS] OK");
+  }
+}
+
+// =============================================================================
+//  reproducir_voz — Lee un PCM de LittleFS y lo envía al I2S (bloqueante)
+//
+//  notificar=true  → envía "VOZ_FIN\n" al PC cuando termina (para VOZ: cmd)
+//  notificar=false → solo reproduce, sin notificar (para colores en LED:)
+// =============================================================================
+void reproducir_voz(VozID id, bool notificar) {
+  if (id >= VOZ_COUNT) {
+    if (notificar) Serial.println("VOZ_FIN");
+    _reproduciendo = false;
+    return;
+  }
+  const char* ruta = VOZ_ARCHIVOS[id];
+  File f = LittleFS.open(ruta, "r");
+  if (!f) {
+    Serial.printf("[VOZ] No encontrado: %s\n", ruta);
+    if (notificar) Serial.println("VOZ_FIN");
+    _reproduciendo = false;
+    return;
+  }
+  size_t escrito;
+  while (f.available()) {
+    int n = f.read(_pcmBuf, sizeof(_pcmBuf));
+    if (n > 0) i2s_write(I2S_PORT, _pcmBuf, n, &escrito, portMAX_DELAY);
+  }
+  f.close();
+  if (notificar) Serial.println("VOZ_FIN");
+  _reproduciendo = false;
+}
+
+// =============================================================================
+//  nombre_a_vozid — Convierte un string del protocolo VOZ: a un VozID
+// =============================================================================
+VozID nombre_a_vozid(const String& nombre) {
+  // Frases fijas
+  if (nombre == "srv_listo")      return VOZ_SRV_LISTO;
+  if (nombre == "simon_listo")    return VOZ_SIMON_LISTO;
+  if (nombre == "mira_escucha")   return VOZ_MIRA_ESCUCHA;
+  if (nombre == "turno_primero")  return VOZ_TURNO_PRIMERO;
+  if (nombre == "turno")          return VOZ_TURNO;
+  if (nombre == "correcto_turno") return VOZ_CORRECTO_TURNO;
+  if (nombre == "correcto")       return VOZ_CORRECTO;
+  if (nombre == "incorrecto")     return VOZ_INCORRECTO;
+  if (nombre == "di_empieza")     return VOZ_DI_EMPIEZA;
+  if (nombre == "tiempo_agotado") return VOZ_TIEMPO_AGOTADO;
+  if (nombre == "pausado")        return VOZ_PAUSADO;
+  if (nombre == "di_volver")      return VOZ_DI_VOLVER;
+  // Frases variables: nivel_02..15
+  if (nombre.startsWith("nivel_")) {
+    return vozNivel(nombre.substring(6).toInt());
+  }
+  // Frases variables: correctos_02..14
+  if (nombre.startsWith("correctos_")) {
+    return vozCorrectos(nombre.substring(10).toInt());
+  }
+  // Frases variables: fin_0000..1200
+  if (nombre.startsWith("fin_")) {
+    return vozFin(nombre.substring(4).toInt());
+  }
+  return VOZ_COUNT;   // inválido
+}
+
+// =============================================================================
 //  SETUP
 // =============================================================================
 void setup() {
@@ -233,6 +318,9 @@ void setup() {
 
   // MAX98357A — I2S speaker
   setup_speaker();
+
+  // LittleFS — partición de audio (PCM pre-grabados)
+  setup_littlefs();
 
   // Reservar buffer de audio en PSRAM.
   // PSRAM OPI (8MB) tiene espacio de sobra; fallback a SRAM si no hay PSRAM.
@@ -320,7 +408,7 @@ void loop() {
 //  PTT — Iniciar grabación
 // =============================================================================
 void iniciar_grabacion() {
-  if (estado == GRABANDO || !audio_buf) return;
+  if (estado == GRABANDO || !audio_buf || _reproduciendo) return;
 
   muestras_grabadas = 0;
 
@@ -436,9 +524,45 @@ void procesar_linea(const String& linea) {
       char buf[20];
       snprintf(buf, sizeof(buf), "COLOR: %s", color.c_str());
       oled_mostrar(buf, "", "");
-      // Tono del color — MAX98357A (350ms, no bloquea el serial porque
-      // Python espera DURACION_LED=800ms antes de enviar el siguiente LED)
+      // Tono del color (350ms) — Python espera DURACION_LED=800ms antes del siguiente LED
       play_color_tone(color.c_str());
+      // Voz del color ("rojo", "verde"…) desde LittleFS — no notifica VOZ_FIN al PC
+      // porque el timing lo cubre el sleep de 800ms del juego (tono+voz ≈ 650ms < 800ms)
+      VozID idColor = VOZ_COUNT;
+      if      (color == "ROJO")     idColor = VOZ_COLOR_ROJO;
+      else if (color == "VERDE")    idColor = VOZ_COLOR_VERDE;
+      else if (color == "AZUL")     idColor = VOZ_COLOR_AZUL;
+      else if (color == "AMARILLO") idColor = VOZ_COLOR_AMARILLO;
+      if (idColor < VOZ_COUNT) {
+        _reproduciendo = true;
+        reproducir_voz(idColor, false);   // notificar=false → sin VOZ_FIN al PC
+      }
+    }
+    return;
+  }
+
+  // ── VOZ:nombre — reproduce un archivo PCM y notifica VOZ_FIN al terminar ──
+  if (linea.startsWith("VOZ:")) {
+    String nombre = linea.substring(4);
+    nombre.trim();
+    VozID id = nombre_a_vozid(nombre);
+    _reproduciendo = true;
+    reproducir_voz(id, true);   // notificar=true → envía VOZ_FIN cuando termina
+    return;
+  }
+
+  // ── SONIDO:tipo — fanfarria de tonos (correcto|error|inicio|gameover) ──────
+  if (linea.startsWith("SONIDO:")) {
+    String tipo = linea.substring(7);
+    tipo.trim();
+    if (tipo == "correcto") {
+      play_tone(1047, 150); play_tone(1319, 150);
+    } else if (tipo == "error") {
+      play_tone(196, 250);  play_tone(165, 250);
+    } else if (tipo == "inicio") {
+      play_tone(262, 150); play_tone(330, 150); play_tone(392, 150); play_tone(523, 150);
+    } else if (tipo == "gameover") {
+      play_tone(523, 150); play_tone(440, 150); play_tone(349, 150); play_tone(262, 150);
     }
     return;
   }

@@ -33,8 +33,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from config import DEBUG
 from tts import (
-    inicializar_tts, esperar_tts,
-    decir, decir_color, reproducir_sonido, tts_hablando, cancelar_tts,
+    inicializar_tts, tts_hablando, cancelar_tts,
+    activar_voz_esp32, notificar_voz_fin, esperar_voz_fin, cancelar_voz_esp32,
 )
 from ws_server     import ServidorWS
 from serial_bridge import SerialBridge
@@ -135,42 +135,51 @@ def _on_estado(estado: Estado):
         oled = _oled_juego_info()
     serial.enviar_oled(*oled)
 
-    # Narración TTS por estado.
+    # Narración por estado — toda la voz sale por la bocina del ESP32.
     if estado == Estado.SHOWING_SEQUENCE:
-        decir("Mira y escucha.", bloquear=False)
+        serial.enviar_voz("mira_escucha")
+        activar_voz_esp32()
 
     elif estado == Estado.LISTENING:
         if _estado_previo == Estado.EVALUATING:
             # Color(es) correcto(s) pero quedan más en la secuencia
             if _ultimos_aceptados > 1:
-                decir(f"{_ultimos_aceptados} colores correctos. Tu turno.", bloquear=False)
+                serial.enviar_voz(f"correctos_{_ultimos_aceptados:02d}")
             else:
-                decir("Correcto. Tu turno.", bloquear=False)
+                serial.enviar_voz("correcto_turno")
+            activar_voz_esp32()
         elif _primer_turno_juego:
             # Primer turno de la partida → orientar al jugador
-            decir("Tu turno. Presiona ESPACIO para hablar.", bloquear=False)
+            serial.enviar_voz("turno_primero")
+            activar_voz_esp32()
             _primer_turno_juego = False
         else:
             # Turno normal (post-nivel, post-repite, etc.)
-            decir("Tu turno.", bloquear=False)
+            serial.enviar_voz("turno")
+            activar_voz_esp32()
 
     elif estado == Estado.CORRECT:
         # Secuencia completa → LEVEL_UP vendrá enseguida; solo confirmar
-        decir("Correcto.", bloquear=False)
+        serial.enviar_voz("correcto")
+        activar_voz_esp32()
 
     elif estado == Estado.IDLE:
         _primer_turno_juego = True   # nueva partida: resetear orientación
 
     elif estado == Estado.PAUSA:
-        decir("Juego pausado.", bloquear=False)
+        serial.enviar_voz("pausado")
+        activar_voz_esp32()
 
     elif estado == Estado.GAME_OVER:
         pts = juego.puntuacion
 
         def _narrar():
             time.sleep(0.3)
-            decir(f"Fin del juego. Obtuviste {pts} puntos.", bloquear=False)
-            decir("Di empieza para volver a jugar.", bloquear=False)
+            serial.enviar_voz(f"fin_{pts:04d}")
+            activar_voz_esp32()
+            esperar_voz_fin(timeout=8.0)    # espera a que termine antes del segundo audio
+            serial.enviar_voz("di_volver")
+            activar_voz_esp32()
 
         threading.Thread(target=_narrar, daemon=True).start()
 
@@ -193,17 +202,12 @@ def _on_leds_apagar():
     ws.enviar_led_activo(None)
 
 
-def _on_sonido(tipo: str, extra=None):
-    threading.Thread(
-        target=reproducir_sonido,
-        args=(tipo, extra),
-        daemon=True,
-    ).start()
-
-    if tipo == "color" and extra:
-        # TTS del color (bloqueante — sincroniza con el LED visual).
-        # _tts_activo queda SET mientras habla → tts_hablando() bloquea PTT automáticamente.
-        decir_color(extra)
+def _on_sonido(tipo: str, _extra=None):
+    if tipo == "color":
+        pass   # El LED:COLOR ya dispara tono + voz del color en el ESP32 automáticamente
+    else:
+        # Fanfarria de tonos (correcto, error, inicio, gameover) → bocina ESP32
+        serial.enviar_sonido(tipo)
 
 
 def _on_secuencia(seq: list):
@@ -222,10 +226,10 @@ def _on_nivel(n: int):
     pts = juego.puntuacion
     serial.enviar_oled(f"NIVEL {n}!", f"Puntos: {pts}", "Bien hecho!")
     if n > 1:
-        threading.Thread(
-            target=lambda: decir(f"Nivel {n}.", bloquear=False),
-            daemon=True,
-        ).start()
+        def _narrar_nivel():
+            serial.enviar_voz(f"nivel_{n:02d}")
+            activar_voz_esp32()
+        threading.Thread(target=_narrar_nivel, daemon=True).start()
 
 
 def _on_puntuacion(p: int):
@@ -239,20 +243,26 @@ def _on_resultado(r: str):
     ws.enviar_resultado(r)
 
     if r == "CORRECT":
-        pass   # TTS lo maneja _on_estado(LISTENING) o _on_estado(CORRECT)
+        pass   # la voz la maneja _on_estado(LISTENING) o _on_estado(CORRECT)
 
     elif r == "WRONG":
         def _narrar_wrong():
             time.sleep(0.2)
-            decir("Incorrecto.", bloquear=False)
-            decir("Di empieza para intentar de nuevo.", bloquear=False)
+            serial.enviar_voz("incorrecto")
+            activar_voz_esp32()
+            esperar_voz_fin(timeout=5.0)
+            serial.enviar_voz("di_empieza")
+            activar_voz_esp32()
         threading.Thread(target=_narrar_wrong, daemon=True).start()
 
     elif r == "TIMEOUT":
         def _narrar_timeout():
             time.sleep(0.2)
-            decir("Tiempo agotado.", bloquear=False)
-            decir("Di empieza para intentar de nuevo.", bloquear=False)
+            serial.enviar_voz("tiempo_agotado")
+            activar_voz_esp32()
+            esperar_voz_fin(timeout=5.0)
+            serial.enviar_voz("di_empieza")
+            activar_voz_esp32()
         threading.Thread(target=_narrar_timeout, daemon=True).start()
 
 
@@ -286,7 +296,8 @@ def _on_cliente_conectado():
 
     time.sleep(0.5)
     log("[Panel] Cliente conectado — narrando bienvenida", "sistema")
-    decir("Simon Dice listo. Presiona ESPACIO para comenzar.", bloquear=False)
+    serial.enviar_voz("simon_listo")
+    activar_voz_esp32()
 
 
 # ─── Callbacks del Serial / audio ────────────────────────────────────────────
@@ -445,9 +456,10 @@ def _on_audio_recibido(pcm_bytes: bytes):
         log("[Voz] Whisper: sin habla detectada", "info")
         ws.enviar_log("Whisper: sin habla detectada (intenta de nuevo)")
 
-    # Cancelar TTS pendiente si el comando es REINICIAR o PARA
+    # Cancelar audio pendiente si el comando es REINICIAR o PARA
     if comando in ("REINICIAR", "PARA"):
         cancelar_tts()
+        cancelar_voz_esp32()
 
     # ── Detección multi-color ──────────────────────────────────────────────
     # Si el audio contiene 2+ colores reconocibles → modo multi-color.
@@ -481,13 +493,22 @@ def _on_comando_panel(cmd: str):
     ws.enviar_log(f"Comando (WASM): {cmd}")
     if cmd in ("REINICIAR", "PARA"):
         cancelar_tts()
+        cancelar_voz_esp32()
     juego.procesar_comando(cmd)
 
 
 def _on_todos_desconectados():
-    """Todos los clientes del panel se desconectaron — cancelar TTS activo."""
+    """Todos los clientes del panel se desconectaron — cancelar audio activo."""
     cancelar_tts()
-    log("[Panel] Todos los clientes desconectados — TTS cancelado", "sistema")
+    cancelar_voz_esp32()
+    log("[Panel] Todos los clientes desconectados — audio cancelado", "sistema")
+
+
+# ─── Callback VOZ_FIN ────────────────────────────────────────────────────────
+
+def _on_voz_fin():
+    """ESP32 terminó de reproducir el audio solicitado por VOZ:."""
+    notificar_voz_fin()
 
 
 # ─── Registro de callbacks ───────────────────────────────────────────────────
@@ -512,6 +533,7 @@ def _registrar_callbacks():
     serial.on_ptt_stop       = _on_ptt_stop
     serial.on_audio_recibido = _on_audio_recibido
     serial.on_audio_corto    = _on_audio_corto
+    serial.on_voz_fin        = _on_voz_fin           # ESP32 terminó de hablar
     serial.on_log            = _on_log
 
     # Panel web → servidor
@@ -520,7 +542,7 @@ def _registrar_callbacks():
     ws.on_pausar_timeout       = juego.pausar_timeout        # pre-pausa (evita race condition)
     ws.on_comando              = _on_comando_panel           # fallback WASM
     ws.on_cliente_conectado    = _on_cliente_conectado
-    ws.on_todos_desconectados  = _on_todos_desconectados     # cancelar TTS al desconectar
+    ws.on_todos_desconectados  = _on_todos_desconectados     # cancelar audio al desconectar
 
 
 # ─── Hilo de tick (timeout del turno) ────────────────────────────────────────
@@ -602,10 +624,12 @@ def main():
     # Hilo de tick para timeouts
     threading.Thread(target=_hilo_tick, daemon=True, name="tick").start()
 
-    # TTS de bienvenida
+    # Audio de bienvenida por la bocina del ESP32
     def _bienvenida():
-        if esperar_tts(timeout=5.0):
-            decir("Servidor listo. Abre el panel web y conecta.", bloquear=True)
+        # Esperar a que el ESP32 envíe READY antes de pedirle que hable
+        time.sleep(2.0)
+        serial.enviar_voz("srv_listo")
+        activar_voz_esp32()
 
     threading.Thread(target=_bienvenida, daemon=True, name="bienvenida").start()
 
